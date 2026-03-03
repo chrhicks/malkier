@@ -6,6 +6,8 @@ export default defineConfig({
   server: {
     allowedHosts: ['chicks-arch'],
     host: true,
-
+    proxy: {
+      '/api': 'http://localhost:8787',
+    },
   },
 })
