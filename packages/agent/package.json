@@ -1,0 +1,21 @@
+{
+  "name": "@malkier/agent",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "check-types": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@effect/ai": "catalog:",
+    "@effect/ai-openai": "catalog:",
+    "@effect/platform": "catalog:",
+    "effect": "catalog:"
+  }
+}
