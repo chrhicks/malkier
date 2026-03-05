@@ -1,4 +1,67 @@
-function App() {
+import { streamAgent } from "./lib/agentStream";
+import { createSignal, For, Show } from "solid-js";
+
+type Bubble = {
+  role: "assistant" | "user";
+  content: string;
+};
+
+export function App() {
+  let prompt!: HTMLInputElement;
+  const [bubbles, setBubbles] = createSignal<Bubble[]>([]);
+  const [activeBubble, setActiveBubble] = createSignal<Bubble | null>(null);
+  const [pending, setPending] = createSignal<boolean>(false);
+
+  const submitPrompt = async (event: SubmitEvent) => {
+    event.preventDefault();
+    if (!prompt || pending()) return;
+
+    const text = prompt.value.trim();
+    if (!text) return;
+
+    setBubbles(prev => [...prev, { role: "user", content: text }]);
+    setActiveBubble({ role: "assistant", content: "" });
+    setPending(true);
+    prompt.value = "";
+
+    try {
+      const abortController = new AbortController();
+      await streamAgent({
+        userId: "a311151e-d40a-4369-94ec-c86fcff67d7c",
+        sessionId: "8c4529c2-1d70-4abe-b255-fba16baa15fb",
+        message: text,
+        onEvent: (event) => {
+          if (event.type === "text-delta") {
+
+            setActiveBubble(prev => (
+              prev && { ...prev, content: prev.content + event.delta }
+            ));
+          }
+          if (event.type === "done") {
+            if (activeBubble()) {
+              setBubbles(prev => [...prev, activeBubble()!]);
+            }
+            setActiveBubble(null);
+            setPending(false);
+          }
+          if (event.type === "error") {
+            setBubbles(prev => [...prev, { role: "assistant", content: `Error: ${event.message}` }]);
+            setActiveBubble(null);
+            setPending(false);
+          }
+        },
+        signal: abortController.signal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setBubbles(prev => [...prev, { role: "assistant", content: `Error: ${message}` }]);
+      setActiveBubble(null);
+      setPending(false);
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
     <div class="deck variant-e">
       <div class="ambient" aria-hidden="true" />
@@ -15,30 +78,25 @@ function App() {
         <section class="panel chat-panel">
           <div class="panel-title">Agent Session</div>
           <div class="chat-log">
-            <article class="bubble assistant">
-              <div class="bubble-role">agent</div>
-              <p>
-                Command deck online. Ask me to explain code or run a bug-fix flow. Try: fix
-                flaky health-check test in payments module.
-              </p>
-            </article>
-
-            <article class="bubble user">
-              <div class="bubble-role">you</div>
-              <p>Fix flaky health-check test in payments module.</p>
-            </article>
-
-            <article class="bubble assistant">
-              <div class="bubble-role">agent</div>
-              <p>
-                Copy. I will inspect the bug, propose a plan, patch it, then run tests.
-              </p>
-            </article>
+            <For each={bubbles()}>
+              {(bubble) => (
+                <article class="bubble" classList={{ user: bubble.role === "user", assistant: bubble.role === "assistant" }}>
+                  <div class="bubble-role">{bubble.role === "assistant" ? "agent" : "you"}</div>
+                  <p>{bubble.content}</p>
+                </article>
+              )}
+            </For>
+            <Show when={activeBubble() !== null}>
+              <article class="bubble assistant">
+                <div class="bubble-role">agent</div>
+                <p>{activeBubble()?.content}</p>
+              </article>
+            </Show>
           </div>
 
-          <form class="composer">
-            <input placeholder="Ask to explain codebase or fix a bug" />
-            <button type="button">dispatch</button>
+          <form class="composer" onSubmit={submitPrompt}>
+            <input ref={prompt} placeholder="Ask to explain codebase or fix a bug" disabled={pending()} />
+            <button type="submit" disabled={pending()}>{pending() ? "running" : "dispatch"}</button>
           </form>
         </section>
 
@@ -70,8 +128,8 @@ function App() {
             <div class="terminal">
               <p class="line cmd">$ rg "health" packages/payments/src</p>
               <p class="line out">health.ts
-health.test.ts
-health-client.ts</p>
+                health.test.ts
+                health-client.ts</p>
               <p class="line ok">Patched 2 files successfully</p>
             </div>
           </section>

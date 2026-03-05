@@ -4,6 +4,8 @@ export type AgentEvent =
   | { readonly type: "error"; readonly message: string }
 
 export interface StreamAgentOptions {
+  readonly userId: string
+  readonly sessionId?: string
   readonly message: string
   readonly onEvent: (event: AgentEvent) => void
   readonly signal?: AbortSignal
@@ -44,7 +46,7 @@ export const streamAgent = async (options: StreamAgentOptions): Promise<void> =>
     headers: {
       "content-type": "application/json"
     },
-    body: JSON.stringify({ message: options.message }),
+    body: JSON.stringify({ userId: options.userId, sessionId: options.sessionId, message: options.message }),
     signal: options.signal
   })
 
