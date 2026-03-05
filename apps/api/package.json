@@ -5,14 +5,20 @@
   "scripts": {
     "dev": "bun --hot src/index.ts",
     "start": "bun src/index.ts",
-    "check-types": "tsc -p tsconfig.json"
+    "check-types": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun src/db/migrate.ts",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@malkier/agent": "file:../../packages/agent",
-    "effect": "^3.19.19"
+    "drizzle-orm": "^0.44.6",
+    "effect": "^3.19.19",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5.9.3"
+    "drizzle-kit": "^0.31.4",
+    "typescript": "catalog:"
   }
 }

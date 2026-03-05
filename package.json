@@ -9,14 +9,14 @@
   "devDependencies": {
     "@types/bun": "latest"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
+  "peerDependencies": {},
   "dependencies": {},
   "catalog": {
     "@effect/ai": "^0.33.2",
     "@effect/ai-openai": "^0.37.2",
     "@effect/platform": "^0.94.5",
-    "effect": "^3.19.19"
+    "effect": "^3.19.19",
+    "typescript": "^5.9.3",
+    "zod": "^4.3.6"
   }
 }
