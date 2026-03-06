@@ -1,8 +1,18 @@
 import { Effect } from "effect"
 import { db } from "../db/client"
 import { sessionMessages, sessions, type SessionMessageRole, type SessionMessageStatus } from "../db/schema"
-import { and, eq, max } from "drizzle-orm"
-import { InternalError, SessionOwnershipError } from "../errors"
+import { asc, desc, eq, max } from "drizzle-orm"
+import { InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
+
+const makeSessionTitle = (message: string) => {
+  const normalized = message.trim().replace(/\s+/g, " ")
+
+  if (normalized.length <= 72) {
+    return normalized
+  }
+
+  return `${normalized.slice(0, 69).trimEnd()}...`
+}
 
 export class SessionService extends Effect.Service<SessionService>()("SessionService", {
   accessors: true,
@@ -25,8 +35,8 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
         catch: (error) => new InternalError({ message: `Failed to load session: ${String(error)}` })
       })
 
-      if (existing !== null && existing?.userId !== userId) {
-        yield* Effect.fail(
+      if (existing != null && existing.userId !== userId) {
+        return yield* Effect.fail(
           new SessionOwnershipError({
             message: `Invalid session id for user: ${String(userId)}, sessionId: ${String(sessionId)}`
           })
@@ -64,6 +74,57 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       return (row[0]?.maxSeq ?? 0) + 1
     })
 
+    const listSessions = Effect.fn("SessionService.listSessions")(function* (userId: string) {
+      return yield* Effect.tryPromise({
+        try: () =>
+          db.select().from(sessions).where(eq(sessions.userId, userId)).orderBy(desc(sessions.updatedAt)),
+        catch: (error) => new InternalError({ message: `Failed to list sessions: ${String(error)}` })
+      })
+    })
+
+    const getSession = Effect.fn("SessionService.getSession")(function* ({
+      userId,
+      sessionId
+    }: {
+      userId: string,
+      sessionId: string
+    }) {
+      const session = yield* Effect.tryPromise({
+        try: () =>
+          db.query.sessions.findFirst({
+            where: eq(sessions.id, sessionId)
+          }),
+        catch: (error) => new InternalError({ message: `Failed to load session: ${String(error)}` })
+      })
+
+      if (session == null) {
+        return yield* Effect.fail(
+          new SessionNotFoundError({
+            message: `Session not found: ${sessionId}`
+          })
+        )
+      }
+
+      if (session.userId !== userId) {
+        return yield* Effect.fail(
+          new SessionOwnershipError({
+            message: `Invalid session id for user: ${String(userId)}, sessionId: ${String(sessionId)}`
+          })
+        )
+      }
+
+      const messages = yield* Effect.tryPromise({
+        try: () =>
+          db.select().from(sessionMessages).where(eq(sessionMessages.sessionId, sessionId)).orderBy(asc(sessionMessages.sequence)),
+        catch: (error) => new InternalError({ message: `Failed to load session messages: ${String(error)}` })
+      })
+
+      return {
+        session,
+        messages
+      }
+    })
+
     const insertSessionMessage = Effect.fn('SessionService.insertSessionMessage')(function* ({
       sessionId,
       message,
@@ -77,6 +138,8 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       role: SessionMessageRole,
       status: NonNullable<SessionMessageStatus>
     }) {
+      const now = new Date()
+
       yield* Effect.tryPromise({
         try: () => db.insert(sessionMessages).values({
           id: crypto.randomUUID(),
@@ -85,17 +148,44 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
           content: message,
           status,
           sequence: nextSequence,
-          createdAt: new Date()
+          createdAt: now
         }),
         catch: (error) => new InternalError({ message: `Failed to insert sessionMessage: ${String(error)} ` })
+      })
+
+      const existingSession = role === "user"
+        ? yield* Effect.tryPromise({
+          try: () =>
+            db.query.sessions.findFirst({
+              columns: {
+                title: true
+              },
+              where: eq(sessions.id, sessionId)
+            }),
+          catch: (error) => new InternalError({ message: `Failed to load session metadata: ${String(error)}` })
+        })
+        : null
+
+      yield* Effect.tryPromise({
+        try: () =>
+          db.update(sessions)
+            .set({
+              updatedAt: now,
+              ...(role === "user" && (existingSession?.title == null || existingSession.title.trim().length === 0)
+                ? { title: makeSessionTitle(message) }
+                : {})
+            })
+            .where(eq(sessions.id, sessionId)),
+        catch: (error) => new InternalError({ message: `Failed to update session metadata: ${String(error)}` })
       })
     })
 
     return {
       ensureSession,
+      getSession,
       nextMessageSequence,
       insertSessionMessage,
+      listSessions,
     }
   })
 }) { }
-

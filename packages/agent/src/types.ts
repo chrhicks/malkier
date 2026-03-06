@@ -1,5 +1,7 @@
+import type { Prompt } from "@effect/ai";
+
 export interface AgentInput {
-  readonly message: string
+  readonly prompt: Prompt.RawInput
 }
 
 export type AgentEvent =

@@ -2,7 +2,7 @@ import { Config, ConfigError, Context, Effect, Layer, Option, Redacted, Stream }
 import type { AgentEvent, AgentInput } from "./types";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { FetchHttpClient } from "@effect/platform";
-import { AiError, LanguageModel } from "@effect/ai";
+import { LanguageModel } from "@effect/ai";
 
 export class Agent extends Context.Tag("@malkier/agent/Agent")<Agent, Agent.Service>() { }
 
@@ -41,7 +41,7 @@ export const make = (options: Agent.Options): Effect.Effect<Agent.Service> =>
     Agent.of({
       runStream: (input) =>
         LanguageModel.streamText({
-          prompt: input.message
+          prompt: input.prompt,
         }).pipe(
           Stream.filterMap((part) =>
             part.type === "text-delta"

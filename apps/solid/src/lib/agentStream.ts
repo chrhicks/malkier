@@ -7,6 +7,7 @@ export interface StreamAgentOptions {
   readonly userId: string
   readonly sessionId?: string
   readonly message: string
+  readonly onSession?: (sessionId: string) => void
   readonly onEvent: (event: AgentEvent) => void
   readonly signal?: AbortSignal
   readonly endpoint?: string
@@ -53,6 +54,11 @@ export const streamAgent = async (options: StreamAgentOptions): Promise<void> =>
   if (!response.ok) {
     const message = await response.text()
     throw new Error(message || `Agent request failed with status ${response.status}`)
+  }
+
+  const sessionId = response.headers.get("x-session-id")
+  if (sessionId !== null) {
+    options.onSession?.(sessionId)
   }
 
   if (response.body === null) {

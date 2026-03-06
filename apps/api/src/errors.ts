@@ -11,3 +11,7 @@ export class InternalError extends Data.TaggedError("InternalError")<{
 export class SessionOwnershipError extends Data.TaggedError('SessionOwnershipError')<{
   readonly message: string
 }> { }
+
+export class SessionNotFoundError extends Data.TaggedError('SessionNotFoundError')<{
+  readonly message: string
+}> { }

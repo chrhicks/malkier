@@ -116,6 +116,18 @@ body {
   border-bottom: 1px solid rgba(82, 122, 138, 0.45);
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .chat-panel {
   min-height: 76vh;
   display: grid;
@@ -154,6 +166,21 @@ body {
 
 .bubble.assistant {
   background: rgba(9, 19, 28, 0.8);
+}
+
+.bubble.system,
+.bubble.tool {
+  background: rgba(16, 18, 25, 0.92);
+  border-style: dashed;
+}
+
+.bubble.error {
+  border-color: rgba(255, 133, 119, 0.52);
+  box-shadow: inset 1px 0 0 rgba(255, 133, 119, 0.4);
+}
+
+.active-stream {
+  border-color: rgba(4, 217, 255, 0.52);
 }
 
 .bubble-role {
@@ -206,8 +233,126 @@ body {
 
 .stack {
   display: grid;
-  grid-template-rows: auto 1fr 1.25fr;
+  grid-template-rows: minmax(0, 1.15fr) auto auto;
   gap: 1rem;
+}
+
+.session-panel {
+  min-height: 24rem;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.session-list {
+  padding: 0.75rem;
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  overflow: auto;
+}
+
+.session-card {
+  border: 1px solid rgba(68, 101, 116, 0.58);
+  background: rgba(10, 15, 22, 0.9);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0.72rem;
+  text-align: left;
+  display: grid;
+  gap: 0.28rem;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    transform 180ms ease,
+    background 180ms ease;
+}
+
+.session-card:hover:not(:disabled),
+.session-card.active {
+  border-color: rgba(4, 217, 255, 0.52);
+  background: rgba(14, 19, 29, 0.98);
+  transform: translateY(-1px);
+}
+
+.session-card:disabled {
+  cursor: default;
+  opacity: 0.66;
+}
+
+.session-title {
+  font-size: 0.9rem;
+}
+
+.session-meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.ghost-button {
+  border: 1px solid rgba(82, 122, 138, 0.52);
+  background: transparent;
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.ghost-button:hover:not(:disabled) {
+  border-color: rgba(4, 217, 255, 0.52);
+}
+
+.ghost-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.facts {
+  margin: 0;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.fact {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.fact dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fact dd {
+  margin: 0;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.status-copy,
+.empty-state {
+  margin: 0;
+  padding: 0.85rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.empty-state {
+  color: var(--muted);
+}
+
+.status-copy.muted {
+  color: var(--muted);
+}
+
+.status-copy.danger {
+  color: var(--danger);
 }
 
 .tasks {
@@ -340,6 +485,16 @@ body {
   box-shadow: inset 1px 0 0 rgba(4, 217, 255, 0.5);
 }
 
+.deck.variant-e .bubble.system,
+.deck.variant-e .bubble.tool {
+  border-color: #454e62;
+  background: #10131a;
+}
+
+.deck.variant-e .bubble.error {
+  border-color: rgba(255, 133, 119, 0.48);
+}
+
 .deck.variant-e .composer {
   border-top-color: #38404d;
 }
@@ -361,6 +516,19 @@ body {
 
 .deck.variant-e .composer button:hover:not(:disabled) {
   border-color: rgba(4, 217, 255, 0.52);
+}
+
+.deck.variant-e .ghost-button,
+.deck.variant-e .session-card {
+  border-color: #384153;
+  background: #0d1118;
+}
+
+.deck.variant-e .session-card:hover:not(:disabled),
+.deck.variant-e .session-card.active,
+.deck.variant-e .ghost-button:hover:not(:disabled) {
+  border-color: rgba(4, 217, 255, 0.52);
+  background: #111723;
 }
 
 .deck.variant-e .task,

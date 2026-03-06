@@ -4,6 +4,8 @@ import { PostAgentMessageRequest } from "../schema"
 import { BadRequestError } from "../errors"
 import { json } from "../request-utils"
 import { SessionService } from "../service/session.service"
+import { Prompt } from "@effect/ai"
+import type { SessionMessage } from "../db/schema"
 
 const encoder = new TextEncoder()
 
@@ -20,15 +22,17 @@ const agentLayer = layerConfig({
 const sseFrame = (event: string, data: unknown): Uint8Array =>
   encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 
+const streamFailureMessage = "Agent stream failed"
+
 
 const makeStreamResponse = ({
   sessionId,
-  message,
+  prompt,
   nextSequence,
   sessionService
 }: {
   sessionId: string
-  message: string
+  prompt: Prompt.RawInput
   nextSequence: number
   sessionService: SessionService
 }) => {
@@ -46,7 +50,7 @@ const makeStreamResponse = ({
           const agent = yield* Agent
           let agentText = '';
 
-          yield* agent.runStream({ message }).pipe(
+          yield* agent.runStream({ prompt }).pipe(
             Stream.runForEach((event) => {
               if (event.type === 'text-delta') {
                 agentText += event.delta
@@ -85,7 +89,7 @@ const makeStreamResponse = ({
           Effect.catchAllCause((cause) =>
             sessionService.insertSessionMessage({
               sessionId,
-              message: cause.toString(),
+              message: streamFailureMessage,
               role: 'assistant',
               status: 'error',
               nextSequence: sequence++
@@ -95,7 +99,7 @@ const makeStreamResponse = ({
                 Effect.sync(() => {
                   send("agent-event", {
                     type: "error",
-                    message: cause.toString()
+                    message: streamFailureMessage
                   })
                 })
               )
@@ -118,12 +122,24 @@ const makeStreamResponse = ({
 
   return new Response(stream, {
     headers: {
+      "access-control-expose-headers": "x-session-id",
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-transform",
-      connection: "keep-alive"
+      connection: "keep-alive",
+      "x-session-id": sessionId
     }
   })
 }
+
+export const createPrompt = (messages: SessionMessage[]): Prompt.RawInput =>
+  Prompt.fromMessages(
+    messages.map(m =>
+      Prompt.makeMessage(m.role, {
+        content: [Prompt.makePart('text', { text: m.content })]
+      }
+      )
+    )
+  )
 
 export const postAgentStream = (request: Request) =>
   Effect.gen(function* () {
@@ -154,9 +170,12 @@ export const postAgentStream = (request: Request) =>
       nextSequence
     })
 
+    const session = yield* SessionService.getSession({ userId: parsed.userId, sessionId })
+    const prompt = createPrompt(session.messages)
+
     return makeStreamResponse({
       sessionService,
-      message: parsed.message,
+      prompt,
       sessionId,
       nextSequence: nextSequence + 1
     })

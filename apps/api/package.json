@@ -11,6 +11,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@effect/ai": "catalog:",
     "@malkier/agent": "file:../../packages/agent",
     "drizzle-orm": "^0.44.6",
     "effect": "^3.19.19",
