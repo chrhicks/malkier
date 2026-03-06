@@ -21,8 +21,19 @@ const sseFrame = (event: string, data: unknown): Uint8Array =>
   encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 
 
-const makeStreamResponse = (message: string, _sessionId: string) => {
+const makeStreamResponse = ({
+  sessionId,
+  message,
+  nextSequence,
+  sessionService
+}: {
+  sessionId: string
+  message: string
+  nextSequence: number
+  sessionService: SessionService
+}) => {
   let fiber: Fiber.RuntimeFiber<void, never> | null = null
+  let sequence = nextSequence
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -33,23 +44,62 @@ const makeStreamResponse = (message: string, _sessionId: string) => {
       fiber = Effect.runFork(
         Effect.gen(function* () {
           const agent = yield* Agent
+          let agentText = '';
 
           yield* agent.runStream({ message }).pipe(
-            Stream.runForEach((event) =>
-              Effect.sync(() => {
-                send("agent-event", event)
-              })
-            )
+            Stream.runForEach((event) => {
+              if (event.type === 'text-delta') {
+                agentText += event.delta
+                return Effect.sync(() => send('agent-event', event))
+              }
+
+              if (event.type === 'done') {
+                return sessionService.insertSessionMessage({
+                  sessionId,
+                  message: agentText,
+                  role: 'assistant',
+                  status: 'complete',
+                  nextSequence: sequence++
+                }).pipe(
+                  Effect.zipRight(Effect.sync(() => send('agent-event', event)))
+                )
+              }
+
+              if (event.type === 'error') {
+                return sessionService.insertSessionMessage({
+                  sessionId,
+                  message: event.message,
+                  role: 'assistant',
+                  status: 'error',
+                  nextSequence: sequence++
+                }).pipe(
+                  Effect.zipRight(Effect.sync(() => send('agent-event', event)))
+                )
+              }
+
+              return Effect.sync(() => send('agent-event', event))
+            })
           )
         }).pipe(
           Effect.provide(agentLayer),
           Effect.catchAllCause((cause) =>
-            Effect.sync(() => {
-              send("agent-event", {
-                type: "error",
-                message: cause.toString()
-              })
-            })
+            sessionService.insertSessionMessage({
+              sessionId,
+              message: cause.toString(),
+              role: 'assistant',
+              status: 'error',
+              nextSequence: sequence++
+            }).pipe(
+              Effect.catchAll(() => Effect.void),
+              Effect.zipRight(
+                Effect.sync(() => {
+                  send("agent-event", {
+                    type: "error",
+                    message: cause.toString()
+                  })
+                })
+              )
+            )
           ),
           Effect.ensuring(
             Effect.sync(() => {
@@ -87,12 +137,29 @@ export const postAgentStream = (request: Request) =>
       catch: (error) => new BadRequestError({ message: `Invalid request body: ${String(error)}` })
     })
 
+    const sessionService = yield* SessionService
+
     const sessionId = yield* SessionService.ensureSession({
       userId: parsed.userId,
       sessionId: parsed.sessionId
     })
 
-    return makeStreamResponse(parsed.message, sessionId)
+    const nextSequence = yield* SessionService.nextMessageSequence(sessionId)
+
+    yield* SessionService.insertSessionMessage({
+      message: parsed.message,
+      role: 'user',
+      sessionId,
+      status: 'complete',
+      nextSequence
+    })
+
+    return makeStreamResponse({
+      sessionService,
+      message: parsed.message,
+      sessionId,
+      nextSequence: nextSequence + 1
+    })
   }).pipe(
     Effect.catchTags({
       BadRequestError: (error) =>
