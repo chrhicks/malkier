@@ -1,11 +1,13 @@
 import { Agent, layerConfig } from "@malkier/agent"
 import { Config, Effect, Fiber, Stream } from "effect"
+import { Response as EffectResponse } from "@effect/ai"
 import { PostAgentMessageRequest } from "../schema"
 import { BadRequestError } from "../errors"
 import { json } from "../request-utils"
 import { SessionService } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import type { SessionMessage } from "../db/schema"
+import { parsePersistedPromptMetadata } from "../agent/persisted-prompts"
 
 const encoder = new TextEncoder()
 
@@ -24,6 +26,13 @@ const sseFrame = (event: string, data: unknown): Uint8Array =>
 
 const streamFailureMessage = "Agent stream failed"
 
+const formatResult = (result: unknown): string => {
+  try {
+    return JSON.stringify(result, null, 2)
+  } catch {
+    return String(result)
+  }
+}
 
 const makeStreamResponse = ({
   sessionId,
@@ -55,6 +64,43 @@ const makeStreamResponse = ({
               if (event.type === 'text-delta') {
                 agentText += event.delta
                 return Effect.sync(() => send('agent-event', event))
+              }
+
+              if (event.type === 'tool-call') {
+                return sessionService.insertSessionMessage({
+                  sessionId,
+                  message: `Calling ${event.name}`,
+                  role: 'assistant',
+                  status: 'complete',
+                  nextSequence: sequence++,
+                  metadata: {
+                    kind: 'assistant-tool-call',
+                    id: event.id,
+                    name: event.name,
+                    params: event.params
+                  }
+                }).pipe(
+                  Effect.zipRight(Effect.sync(() => send('agent-event', event)))
+                )
+              }
+
+              if (event.type === 'tool-result') {
+                return sessionService.insertSessionMessage({
+                  sessionId,
+                  message: formatResult(event.result),
+                  role: 'tool',
+                  status: 'complete',
+                  nextSequence: sequence++,
+                  metadata: {
+                    kind: 'tool-result',
+                    id: event.id,
+                    name: event.name,
+                    result: event.result,
+                    isFailure: event.isFailure
+                  }
+                }).pipe(
+                  Effect.zipRight(Effect.sync(() => send('agent-event', event)))
+                )
               }
 
               if (event.type === 'done') {
@@ -131,15 +177,65 @@ const makeStreamResponse = ({
   })
 }
 
-export const createPrompt = (messages: SessionMessage[]): Prompt.RawInput =>
-  Prompt.fromMessages(
-    messages.map(m =>
-      Prompt.makeMessage(m.role, {
-        content: [Prompt.makePart('text', { text: m.content })]
-      }
-      )
+export const collectPrompt = (messages: SessionMessage[]): Prompt.RawInput => {
+  let prompt = Prompt.empty
+  let responseParts: EffectResponse.AnyPart[] = []
+
+  const flushResponseParts = () => {
+    if (responseParts.length === 0) return
+
+    prompt = Prompt.merge(prompt, Prompt.fromResponseParts(responseParts))
+    responseParts = []
+  }
+
+  for (const msg of messages) {
+    const meta = parsePersistedPromptMetadata(msg.metadata)
+    if (meta?.kind === 'assistant-tool-call') {
+      responseParts.push(EffectResponse.makePart('tool-call', {
+        id: meta.id,
+        name: meta.name,
+        params: meta.params,
+        providerExecuted: false
+      }))
+      continue
+    }
+
+    if (meta?.kind === 'tool-result') {
+      responseParts.push(EffectResponse.makePart('tool-result', {
+        id: meta.id,
+        name: meta.name,
+        result: meta.result,
+        encodedResult: meta.result,
+        isFailure: meta.isFailure,
+        providerExecuted: false
+      }))
+      continue
+    }
+
+    if (msg.role === 'assistant' && responseParts.length > 0) {
+      responseParts.push(EffectResponse.makePart('text', { text: msg.content }))
+      continue
+    }
+
+    flushResponseParts()
+
+    prompt = Prompt.merge(
+      prompt,
+      Prompt.fromMessages([
+        Prompt.makeMessage(msg.role, {
+          content: [Prompt.makePart('text', { text: msg.content })]
+        })
+      ])
     )
-  )
+  }
+
+  flushResponseParts()
+
+  return prompt
+}
+
+export const createPrompt = (messages: SessionMessage[]): Prompt.RawInput =>
+  collectPrompt(messages)
 
 export const postAgentStream = (request: Request) =>
   Effect.gen(function* () {

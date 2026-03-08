@@ -3,6 +3,7 @@ import { db } from "../db/client"
 import { sessionMessages, sessions, type SessionMessageRole, type SessionMessageStatus } from "../db/schema"
 import { asc, desc, eq, max } from "drizzle-orm"
 import { InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
+import type { PersistedAssistantToolCall, PersistedToolResult } from "../agent/persisted-prompts"
 
 const makeSessionTitle = (message: string) => {
   const normalized = message.trim().replace(/\s+/g, " ")
@@ -130,13 +131,15 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       message,
       nextSequence,
       role,
-      status
+      status,
+      metadata
     }: {
       sessionId: string,
       message: string,
       nextSequence: number,
       role: SessionMessageRole,
-      status: NonNullable<SessionMessageStatus>
+      status: NonNullable<SessionMessageStatus>,
+      metadata?: PersistedAssistantToolCall | PersistedToolResult
     }) {
       const now = new Date()
 
@@ -148,7 +151,8 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
           content: message,
           status,
           sequence: nextSequence,
-          createdAt: now
+          createdAt: now,
+          metadata: JSON.stringify(metadata)
         }),
         catch: (error) => new InternalError({ message: `Failed to insert sessionMessage: ${String(error)} ` })
       })
