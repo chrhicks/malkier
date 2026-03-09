@@ -8,6 +8,7 @@ import { SessionService } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import type { SessionMessage } from "../db/schema"
 import { parsePersistedPromptMetadata } from "../agent/persisted-prompts"
+import { getSessionTools } from "../agent/session-tools"
 
 const encoder = new TextEncoder()
 
@@ -35,11 +36,13 @@ const formatResult = (result: unknown): string => {
 }
 
 const makeStreamResponse = ({
+  userId,
   sessionId,
   prompt,
   nextSequence,
   sessionService
 }: {
+  userId: string
   sessionId: string
   prompt: Prompt.RawInput
   nextSequence: number
@@ -58,8 +61,8 @@ const makeStreamResponse = ({
         Effect.gen(function* () {
           const agent = yield* Agent
           let agentText = '';
-
-          yield* agent.runStream({ prompt }).pipe(
+          const toolkit = yield* getSessionTools(userId, sessionService)
+          yield* agent.runStream({ prompt, toolkit }).pipe(
             Stream.runForEach((event) => {
               if (event.type === 'text-delta') {
                 agentText += event.delta
@@ -272,6 +275,7 @@ export const postAgentStream = (request: Request) =>
     return makeStreamResponse({
       sessionService,
       prompt,
+      userId: parsed.userId,
       sessionId,
       nextSequence: nextSequence + 1
     })
