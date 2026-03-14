@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { Prompt, Response } from "@effect/ai"
-import type { SessionMessage } from "../db/schema"
 import { collectPrompt } from "./post-agent-stream"
+import type { SessionMessageWithMetadata } from "../service/session.service"
 
 const makeSessionMessage = (
-  overrides: Partial<SessionMessage> & Pick<SessionMessage, "role" | "content" | "sequence">
-): SessionMessage => ({
+  overrides: Partial<SessionMessageWithMetadata> & Pick<SessionMessageWithMetadata, "role" | "content" | "sequence">
+): SessionMessageWithMetadata => ({
   id: overrides.id ?? `msg-${overrides.sequence}`,
   sessionId: overrides.sessionId ?? "session-1",
   role: overrides.role,
@@ -23,33 +23,33 @@ const normalizePrompt = (prompt: Prompt.Prompt) =>
     content: typeof message.content === "string"
       ? message.content
       : message.content.map((part) => {
-      switch (part.type) {
-        case "text":
-          return { type: part.type, text: part.text }
-        case "tool-call":
-          return {
-            type: part.type,
-            id: part.id,
-            name: part.name,
-            params: part.params,
-            providerExecuted: part.providerExecuted
-          }
-        case "tool-result":
-          return {
-            type: part.type,
-            id: part.id,
-            name: part.name,
-            result: part.result,
-            isFailure: part.isFailure,
-            providerExecuted: part.providerExecuted
-          }
-      }
+        switch (part.type) {
+          case "text":
+            return { type: part.type, text: part.text }
+          case "tool-call":
+            return {
+              type: part.type,
+              id: part.id,
+              name: part.name,
+              params: part.params,
+              providerExecuted: part.providerExecuted
+            }
+          case "tool-result":
+            return {
+              type: part.type,
+              id: part.id,
+              name: part.name,
+              result: part.result,
+              isFailure: part.isFailure,
+              providerExecuted: part.providerExecuted
+            }
+        }
       })
   }))
 
 describe("collectPrompt", () => {
   test("rebuilds persisted tool-call history as structured prompt messages", () => {
-    const messages: SessionMessage[] = [
+    const messages: SessionMessageWithMetadata[] = [
       makeSessionMessage({
         role: "user",
         content: "What is the weather in Paris?",
@@ -59,24 +59,24 @@ describe("collectPrompt", () => {
         role: "assistant",
         content: "Calling get_weather",
         sequence: 2,
-        metadata: JSON.stringify({
-          kind: "assistant-tool-call",
+        metadata: {
+          kind: "tool-call",
           id: "call-1",
           name: "get_weather",
           params: { city: "Paris" }
-        })
+        }
       }),
       makeSessionMessage({
         role: "tool",
         content: '{"forecast":"sunny in Paris"}',
         sequence: 3,
-        metadata: JSON.stringify({
+        metadata: {
           kind: "tool-result",
           id: "call-1",
           name: "get_weather",
           result: { forecast: "sunny in Paris" },
           isFailure: false
-        })
+        }
       }),
       makeSessionMessage({
         role: "assistant",
@@ -131,18 +131,19 @@ describe("collectPrompt", () => {
     expect(normalizePrompt(actual)).toEqual(normalizePrompt(expected))
   })
 
-  test("falls back to plain text messages when metadata is invalid", () => {
-    const messages: SessionMessage[] = [
+  test("keeps messages without metadata as plain text", () => {
+    const messages: SessionMessageWithMetadata[] = [
       makeSessionMessage({
         role: "assistant",
         content: "Calling get_weather",
         sequence: 1,
-        metadata: "{not json}"
+        metadata: null
       }),
       makeSessionMessage({
         role: "tool",
         content: "tool output",
-        sequence: 2
+        sequence: 2,
+        metadata: null
       })
     ]
 
@@ -159,4 +160,5 @@ describe("collectPrompt", () => {
       }
     ])
   })
+
 })

@@ -1,9 +1,9 @@
 import { Effect } from "effect"
 import { db } from "../db/client"
-import { sessionMessages, sessions, type SessionMessageRole, type SessionMessageStatus } from "../db/schema"
+import { sessionMessages, sessions, type SessionMessage, type SessionMessageRole, type SessionMessageStatus } from "../db/schema"
 import { asc, desc, eq, max } from "drizzle-orm"
 import { InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
-import type { PersistedAssistantToolCall, PersistedToolResult } from "../agent/persisted-prompts"
+import { decodeToolMetadata, type PromptMetadata } from "../agent/persisted-prompts"
 
 const makeSessionTitle = (message: string) => {
   const normalized = message.trim().replace(/\s+/g, " ")
@@ -14,6 +14,26 @@ const makeSessionTitle = (message: string) => {
 
   return `${normalized.slice(0, 69).trimEnd()}...`
 }
+
+export type SessionMessageWithMetadata = Omit<SessionMessage, 'metadata'> & {
+  metadata: PromptMetadata | null
+}
+
+const decodeMetadata = Effect.fn('SessionService.decodeMetadata')(
+  (metadata: string | null) =>
+    metadata == null
+      ? Effect.succeed(null)
+      : decodeToolMetadata(metadata)
+)
+
+const decodeMessage = Effect.fn('SessionService.decodeMessage')(function* (
+  message: SessionMessage
+) {
+  return {
+    ...message,
+    metadata: yield* decodeMetadata(message.metadata)
+  }
+})
 
 export class SessionService extends Effect.Service<SessionService>()("SessionService", {
   accessors: true,
@@ -114,11 +134,16 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
         )
       }
 
-      const messages = yield* Effect.tryPromise({
+      const dbMessages = yield* Effect.tryPromise({
         try: () =>
-          db.select().from(sessionMessages).where(eq(sessionMessages.sessionId, sessionId)).orderBy(asc(sessionMessages.sequence)),
+          db.select()
+            .from(sessionMessages)
+            .where(eq(sessionMessages.sessionId, sessionId))
+            .orderBy(asc(sessionMessages.sequence)),
         catch: (error) => new InternalError({ message: `Failed to load session messages: ${String(error)}` })
       })
+
+      const messages = yield* Effect.forEach(dbMessages, decodeMessage)
 
       return {
         session,
@@ -139,7 +164,7 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       nextSequence: number,
       role: SessionMessageRole,
       status: NonNullable<SessionMessageStatus>,
-      metadata?: PersistedAssistantToolCall | PersistedToolResult
+      metadata?: PromptMetadata
     }) {
       const now = new Date()
 

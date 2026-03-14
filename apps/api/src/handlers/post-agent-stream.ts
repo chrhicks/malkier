@@ -4,10 +4,8 @@ import { Response as EffectResponse } from "@effect/ai"
 import { PostAgentMessageRequest } from "../schema"
 import { BadRequestError } from "../errors"
 import { json } from "../request-utils"
-import { SessionService } from "../service/session.service"
+import { SessionService, type SessionMessageWithMetadata } from "../service/session.service"
 import { Prompt } from "@effect/ai"
-import type { SessionMessage } from "../db/schema"
-import { parsePersistedPromptMetadata } from "../agent/persisted-prompts"
 import { getSessionTools } from "../agent/session-tools"
 
 const encoder = new TextEncoder()
@@ -77,7 +75,7 @@ const makeStreamResponse = ({
                   status: 'complete',
                   nextSequence: sequence++,
                   metadata: {
-                    kind: 'assistant-tool-call',
+                    kind: 'tool-call',
                     id: event.id,
                     name: event.name,
                     params: event.params
@@ -180,7 +178,7 @@ const makeStreamResponse = ({
   })
 }
 
-export const collectPrompt = (messages: SessionMessage[]): Prompt.RawInput => {
+export const collectPrompt = (messages: SessionMessageWithMetadata[]): Prompt.RawInput => {
   let prompt = Prompt.empty
   let responseParts: EffectResponse.AnyPart[] = []
 
@@ -192,24 +190,23 @@ export const collectPrompt = (messages: SessionMessage[]): Prompt.RawInput => {
   }
 
   for (const msg of messages) {
-    const meta = parsePersistedPromptMetadata(msg.metadata)
-    if (meta?.kind === 'assistant-tool-call') {
+    if (msg.metadata?.kind === 'tool-call') {
       responseParts.push(EffectResponse.makePart('tool-call', {
-        id: meta.id,
-        name: meta.name,
-        params: meta.params,
+        id: msg.metadata?.id,
+        name: msg.metadata?.name,
+        params: msg.metadata?.params,
         providerExecuted: false
       }))
       continue
     }
 
-    if (meta?.kind === 'tool-result') {
+    if (msg.metadata?.kind === 'tool-result') {
       responseParts.push(EffectResponse.makePart('tool-result', {
-        id: meta.id,
-        name: meta.name,
-        result: meta.result,
-        encodedResult: meta.result,
-        isFailure: meta.isFailure,
+        id: msg.metadata?.id,
+        name: msg.metadata?.name,
+        result: msg.metadata?.result,
+        encodedResult: msg.metadata?.result,
+        isFailure: msg.metadata?.isFailure,
         providerExecuted: false
       }))
       continue
@@ -237,7 +234,7 @@ export const collectPrompt = (messages: SessionMessage[]): Prompt.RawInput => {
   return prompt
 }
 
-export const createPrompt = (messages: SessionMessage[]): Prompt.RawInput =>
+export const createPrompt = (messages: SessionMessageWithMetadata[]): Prompt.RawInput =>
   collectPrompt(messages)
 
 export const postAgentStream = (request: Request) =>

@@ -11,6 +11,7 @@ import {
   type SessionMessageStatus,
   type SessionSummary,
 } from "./lib/sessions";
+import { formatMetadata, formatToolContent } from "./lib/format.util";
 
 type Bubble = {
   role: SessionMessageRole;
@@ -47,11 +48,15 @@ const bubbleLabel = (role: SessionMessageRole) => {
   }
 };
 
-const fromSessionMessage = (message: SessionMessage): Bubble => ({
-  role: message.role,
-  content: message.status === "error" ? `Error: ${message.content}` : message.content,
-  status: message.status,
-});
+const fromSessionMessage = (message: SessionMessage): Bubble => {
+  const formatted = formatMetadata(message.metadata)
+
+  return ({
+    role: message.role,
+    content: message.status === "error" ? `Error: ${message.content}` : formatted ?? message.content,
+    status: message.status,
+  })
+}
 
 const sortSessions = (items: SessionSummary[]) =>
   [...items].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
@@ -121,6 +126,7 @@ export function App() {
       setBubbles(detail.messages.map(fromSessionMessage));
       setStatusLine(`Loaded ${formatSessionTitle(detail.session)}.`);
     } catch (error) {
+      console.error(error)
       if (currentLoad !== sessionLoadVersion) {
         return;
       }
@@ -181,6 +187,19 @@ export function App() {
     setStatusLine(resolvedSessionId === null ? "Creating a new session..." : "Streaming response...");
     prompt.value = "";
 
+    const commitAssistantText = () => {
+      if (assistantText.trim().length > 0) {
+        setBubbles((previous) => [
+          ...previous,
+          {
+            role: 'assistant', content: assistantText, status: 'complete'
+          }
+        ])
+        assistantText = ''
+      }
+      setActiveBubble(null)
+    }
+
     try {
       const abortController = new AbortController();
 
@@ -212,21 +231,35 @@ export function App() {
             return;
           }
 
+          if (streamEvent.type === 'tool-call') {
+            commitAssistantText()
+            setBubbles((previous) => [...previous, {
+              role: 'assistant',
+              content: formatToolContent(streamEvent),
+              status: 'complete'
+            }])
+            return
+          }
+
+          if (streamEvent.type === 'tool-result') {
+            commitAssistantText()
+            setBubbles((previous) => [...previous, {
+              role: 'tool',
+              content: formatToolContent(streamEvent),
+              status: 'complete'
+            }])
+            return
+          }
+
           if (streamEvent.type === "error") {
+            commitAssistantText()
             streamErrorMessage = streamEvent.message;
           }
         },
         signal: abortController.signal,
       });
 
-      setActiveBubble(null);
-
-      if (assistantText.length > 0) {
-        setBubbles((previous) => [
-          ...previous,
-          { role: "assistant", content: assistantText, status: "complete" },
-        ]);
-      }
+      commitAssistantText()
 
       if (streamErrorMessage !== null) {
         setBubbles((previous) => [

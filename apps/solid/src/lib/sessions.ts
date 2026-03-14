@@ -1,3 +1,5 @@
+import type { PersistedPromptMetadata } from "./persisted-prompt"
+
 export type SessionStatus = "active" | "archived" | "deleted"
 export type SessionMessageRole = "system" | "user" | "assistant" | "tool"
 export type SessionMessageStatus = "streaming" | "complete" | "error"
@@ -19,7 +21,7 @@ export interface SessionMessage {
   readonly status: SessionMessageStatus
   readonly sequence: number
   readonly tokenCount: number | null
-  readonly metadata: string | null
+  readonly metadata: PersistedPromptMetadata | null
   readonly createdAt: string
 }
 

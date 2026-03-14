@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import type { Session, SessionMessage } from "../db/schema"
-import { InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
-import type { SessionService } from "../service/session.service"
+import type { Session } from "../db/schema"
+import { InternalError, MetadataJsonError, MetadataShapeError, SessionNotFoundError, SessionOwnershipError } from "../errors"
+import type { SessionMessageWithMetadata, SessionService } from "../service/session.service"
 import { getSessionTools } from "./session-tools"
 
 const makeSession = (overrides: Partial<Session> = {}): Session => ({
@@ -14,7 +14,7 @@ const makeSession = (overrides: Partial<Session> = {}): Session => ({
   updatedAt: overrides.updatedAt ?? new Date("2026-03-09T00:00:00.000Z")
 })
 
-const makeSessionMessage = (overrides: Partial<SessionMessage> = {}): SessionMessage => ({
+const makeSessionMessage = (overrides: Partial<SessionMessageWithMetadata> = {}): SessionMessageWithMetadata => ({
   id: overrides.id ?? "message-1",
   sessionId: overrides.sessionId ?? "session-1",
   role: overrides.role ?? "user",
@@ -164,6 +164,14 @@ describe("getSessionTools", () => {
       {
         error: new InternalError({ message: "DB offline" }),
         expected: { kind: "internal", message: "Unable to load session data right now." }
+      },
+      {
+        error: new MetadataJsonError({ message: "Bad JSON" }),
+        expected: { kind: "internal", message: "Unable to read session message data right now." }
+      },
+      {
+        error: new MetadataShapeError({ message: "Bad shape" }),
+        expected: { kind: "internal", message: "Unable to read session message data right now." }
       }
     ] as const
 

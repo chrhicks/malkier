@@ -44,7 +44,7 @@ const SessionToolkit = Toolkit.make(ListSessions, GetSession)
 
 
 const toSessionToolFailure = (error: {
-  _tag: 'SessionNotFoundError' | 'SessionOwnershipError' | 'InternalError',
+  _tag: 'SessionNotFoundError' | 'SessionOwnershipError' | 'InternalError' | 'MetadataJsonError' | 'MetadataShapeError',
   message: string
 }): {
   kind: 'not-found' | 'forbidden' | 'internal',
@@ -57,6 +57,10 @@ const toSessionToolFailure = (error: {
       return { kind: 'forbidden' as const, message: 'That session is not available.' }
     case 'InternalError':
       return { kind: 'internal' as const, message: 'Unable to load session data right now.' }
+    case 'MetadataJsonError':
+    case 'MetadataShapeError':
+      return { kind: 'internal' as const, message: 'Unable to read session message data right now.' }
+
   }
 }
 
@@ -90,11 +94,12 @@ export const getSessionTools = (userId: string, sessionService: SessionService) 
               Effect.catchTags({
                 SessionNotFoundError: (error) => Effect.fail(toSessionToolFailure(error)),
                 SessionOwnershipError: (error) => Effect.fail(toSessionToolFailure(error)),
-                InternalError: (error) => Effect.fail(toSessionToolFailure(error))
+                InternalError: (error) => Effect.fail(toSessionToolFailure(error)),
+                MetadataJsonError: (error) => Effect.fail(toSessionToolFailure(error)),
+                MetadataShapeError: (error) => Effect.fail(toSessionToolFailure(error))
               })
             )
         })
       )
     )
   )
-

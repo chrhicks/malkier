@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { BadRequestError, InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
+import { BadRequestError } from "../errors"
 import { json } from "../request-utils"
 import { SessionRouteParams, SessionUserQuery } from "../schema"
 import { SessionService } from "../service/session.service"

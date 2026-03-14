@@ -1,4 +1,4 @@
-import { Data } from 'effect'
+import { Data, Schema } from 'effect'
 
 export class BadRequestError extends Data.TaggedError("BadRequestError")<{
   readonly message: string
@@ -15,3 +15,17 @@ export class SessionOwnershipError extends Data.TaggedError('SessionOwnershipErr
 export class SessionNotFoundError extends Data.TaggedError('SessionNotFoundError')<{
   readonly message: string
 }> { }
+
+export class MetadataJsonError extends Schema.TaggedError<MetadataJsonError>()(
+  'MetadataJsonError',
+  {
+    message: Schema.String
+  }
+) { }
+
+export class MetadataShapeError extends Schema.TaggedError<MetadataShapeError>()(
+  'MetadataShapeError',
+  {
+    message: Schema.String
+  }
+) { }
