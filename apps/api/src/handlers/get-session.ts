@@ -3,28 +3,36 @@ import { BadRequestError } from "../errors"
 import { json } from "../request-utils"
 import { SessionRouteParams, SessionUserQuery } from "../schema"
 import { SessionService } from "../service/session.service"
+import withHttpObservability from "../server/http-observability"
 
 export const getSession = (request: Bun.BunRequest<"/api/sessions/:sessionId">) =>
-  Effect.gen(function* () {
-    const url = new URL(request.url)
+  withHttpObservability(
+    'http.get-session',
+    {
+      url: request.url,
+      sessionId: request.params.sessionId
+    },
+    Effect.gen(function* () {
+      const url = new URL(request.url)
 
-    const query = yield* Effect.try({
-      try: () => SessionUserQuery.parse({ userId: url.searchParams.get("userId") }),
-      catch: (error) => new BadRequestError({ message: `Invalid request query: ${String(error)}` })
+      const query = yield* Effect.try({
+        try: () => SessionUserQuery.parse({ userId: url.searchParams.get("userId") }),
+        catch: (error) => new BadRequestError({ message: `Invalid request query: ${String(error)}` })
+      })
+
+      const params = yield* Effect.try({
+        try: () => SessionRouteParams.parse(request.params),
+        catch: (error) => new BadRequestError({ message: `Invalid route params: ${String(error)}` })
+      })
+
+      const session = yield* SessionService.getSession({
+        userId: query.userId,
+        sessionId: params.sessionId
+      })
+
+      return json(200, session)
     })
-
-    const params = yield* Effect.try({
-      try: () => SessionRouteParams.parse(request.params),
-      catch: (error) => new BadRequestError({ message: `Invalid route params: ${String(error)}` })
-    })
-
-    const session = yield* SessionService.getSession({
-      userId: query.userId,
-      sessionId: params.sessionId
-    })
-
-    return json(200, session)
-  }).pipe(
+  ).pipe(
     Effect.catchTags({
       BadRequestError: (error) =>
         Effect.succeed(json(400, { error: error.message })),
@@ -39,3 +47,4 @@ export const getSession = (request: Bun.BunRequest<"/api/sessions/:sessionId">) 
       Effect.succeed(json(500, { error: "Unexpected error" }))
     )
   )
+

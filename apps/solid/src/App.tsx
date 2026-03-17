@@ -7,17 +7,11 @@ import {
   listSessions,
   setStoredActiveSessionId,
   type SessionMessage,
-  type SessionMessageRole,
-  type SessionMessageStatus,
   type SessionSummary,
 } from "./lib/sessions";
 import { formatMetadata, formatToolContent } from "./lib/format.util";
-
-type Bubble = {
-  role: SessionMessageRole;
-  content: string;
-  status: SessionMessageStatus;
-};
+import type { Bubble } from "./types";
+import { MessageBubble } from "./components/MessageBubble";
 
 const sessionTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -35,18 +29,6 @@ const formatSessionTitle = (session: SessionSummary | null) => session?.title?.t
 
 const formatSessionTimestamp = (value: string) => sessionTimestampFormatter.format(new Date(value));
 
-const bubbleLabel = (role: SessionMessageRole) => {
-  switch (role) {
-    case "assistant":
-      return "agent";
-    case "tool":
-      return "tool";
-    case "system":
-      return "system";
-    case "user":
-      return "you";
-  }
-};
 
 const fromSessionMessage = (message: SessionMessage): Bubble => {
   const formatted = formatMetadata(message.metadata)
@@ -335,19 +317,7 @@ export function App() {
               >
                 <For each={bubbles()}>
                   {(bubble) => (
-                    <article
-                      class="bubble"
-                      classList={{
-                        user: bubble.role === "user",
-                        assistant: bubble.role === "assistant",
-                        system: bubble.role === "system",
-                        tool: bubble.role === "tool",
-                        error: bubble.status === "error",
-                      }}
-                    >
-                      <div class="bubble-role">{bubbleLabel(bubble.role)}</div>
-                      <p>{bubble.content}</p>
-                    </article>
+                    <MessageBubble bubble={bubble} />
                   )}
                 </For>
                 <Show when={activeBubble() !== null}>
