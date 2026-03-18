@@ -1,6 +1,6 @@
 import { Tool, Toolkit } from "@effect/ai";
 import { Effect, Schema } from "effect";
-import type { SessionService } from "../service/session.service";
+import type { SessionService } from "../../service/session.service";
 
 const SessionToolFailure = Schema.Struct({
   kind: Schema.Literal('not-found', 'forbidden', 'internal'),
@@ -40,9 +40,6 @@ const GetSession = Tool.make('get_session', {
 })
 
 
-const SessionToolkit = Toolkit.make(ListSessions, GetSession)
-
-
 const toSessionToolFailure = (error: {
   _tag: 'SessionNotFoundError' | 'SessionOwnershipError' | 'InternalError' | 'MetadataJsonError' | 'MetadataShapeError',
   message: string
@@ -64,42 +61,38 @@ const toSessionToolFailure = (error: {
   }
 }
 
-export const getSessionTools = (userId: string, sessionService: SessionService) =>
-  SessionToolkit.pipe(
-    Effect.provide(
-      SessionToolkit.toLayer(
-        SessionToolkit.of({
-          list_sessions: () =>
-            sessionService.listSessions(userId).pipe(
-              Effect.map((sessions) => sessions.map(session => ({
-                id: session.id,
-                title: session.title ?? "Untitled session",
-                updatedAt: session.updatedAt.toISOString()
-              }))),
-              Effect.catchTags({
-                InternalError: (error) => Effect.fail(toSessionToolFailure(error))
-              })
-            ),
+export const SessionToolkit = Toolkit.make(ListSessions, GetSession)
 
-          get_session: ({ sessionId }) =>
-            sessionService.getSession({ userId, sessionId }).pipe(
-              Effect.map(({ session, messages }) => ({
-                id: session.id,
-                title: session.title ?? 'Untitled session',
-                messages: messages.map(message => ({
-                  role: message.role,
-                  content: message.content
-                }))
-              })),
-              Effect.catchTags({
-                SessionNotFoundError: (error) => Effect.fail(toSessionToolFailure(error)),
-                SessionOwnershipError: (error) => Effect.fail(toSessionToolFailure(error)),
-                InternalError: (error) => Effect.fail(toSessionToolFailure(error)),
-                MetadataJsonError: (error) => Effect.fail(toSessionToolFailure(error)),
-                MetadataShapeError: (error) => Effect.fail(toSessionToolFailure(error))
-              })
-            )
+export const makeSessionToolkitLayer = (userId: string, sessionService: SessionService) =>
+  SessionToolkit.toLayer({
+    list_sessions: () =>
+      sessionService.listSessions(userId).pipe(
+        Effect.map((sessions) => sessions.map(session => ({
+          id: session.id,
+          title: session.title ?? "Untitled session",
+          updatedAt: session.updatedAt.toISOString()
+        }))),
+        Effect.catchTags({
+          InternalError: (error) => Effect.fail(toSessionToolFailure(error))
+        })
+      ),
+
+    get_session: ({ sessionId }) =>
+      sessionService.getSession({ userId, sessionId }).pipe(
+        Effect.map(({ session, messages }) => ({
+          id: session.id,
+          title: session.title ?? 'Untitled session',
+          messages: messages.map(message => ({
+            role: message.role,
+            content: message.content
+          }))
+        })),
+        Effect.catchTags({
+          SessionNotFoundError: (error) => Effect.fail(toSessionToolFailure(error)),
+          SessionOwnershipError: (error) => Effect.fail(toSessionToolFailure(error)),
+          InternalError: (error) => Effect.fail(toSessionToolFailure(error)),
+          MetadataJsonError: (error) => Effect.fail(toSessionToolFailure(error)),
+          MetadataShapeError: (error) => Effect.fail(toSessionToolFailure(error))
         })
       )
-    )
-  )
+  })

@@ -3,6 +3,7 @@ import { AiError, LanguageModel, Tool, Toolkit } from "@effect/ai"
 import type * as Response from "@effect/ai/Response"
 import { Chunk, Effect, Layer, Schema, Stream } from "effect"
 import { makeWithLanguageModelLayer } from "./agent"
+import type { AgentStreamError } from "./types"
 
 const usage = {
   inputTokens: 1,
@@ -30,7 +31,7 @@ const makeTestAgent = (streamText: (options: LanguageModel.ProviderOptions) => S
     )
   )
 
-const collectEvents = (stream: Stream.Stream<unknown, never>) =>
+const collectEvents = (stream: Stream.Stream<unknown, AgentStreamError>) =>
   Effect.runPromise(
     Stream.runCollect(stream).pipe(
       Effect.map(Chunk.toReadonlyArray)

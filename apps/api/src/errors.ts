@@ -1,4 +1,5 @@
 import { Data, Schema } from 'effect'
+import { extend } from 'zod/mini'
 
 export class BadRequestError extends Data.TaggedError("BadRequestError")<{
   readonly message: string
@@ -29,3 +30,7 @@ export class MetadataShapeError extends Schema.TaggedError<MetadataShapeError>()
     message: Schema.String
   }
 ) { }
+
+export class StreamTimeoutError extends Data.TaggedError("StreamTimeoutError")<{
+  readonly message: string
+}> { }

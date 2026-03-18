@@ -1,10 +1,13 @@
 import { Config, ConfigError, Context, Effect, Layer, Mailbox, Option, Redacted, Stream } from "effect";
-import type { AgentEvent, AgentInput } from "./types";
+import type { AgentEvent, AgentInput, AgentStreamError } from "./types";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { FetchHttpClient } from "@effect/platform";
 import { AiError, LanguageModel, Prompt } from "@effect/ai";
 import type * as Tool from '@effect/ai/Tool'
 import type * as Response from "@effect/ai/Response";
+import { AgentMaxTurnsExceededError, StreamTimeoutError, TurnTimeoutError } from "./errors";
+
+const maxTurns = 5
 
 export class Agent extends Context.Tag("@malkier/agent/Agent")<Agent, Agent.Service>() { }
 
@@ -12,7 +15,7 @@ export declare namespace Agent {
   export interface Service {
     runStream: <Tools extends Record<string, Tool.Any> = {}>(
       input: AgentInput<Tools>
-    ) => Stream.Stream<AgentEvent, never>
+    ) => Stream.Stream<AgentEvent, AgentStreamError>
   }
 
   export interface Options {
@@ -73,19 +76,34 @@ const toEvent = <Tools extends Record<string, Tool.Any>>(
 }
 
 const runTurn = <Tools extends Record<string, Tool.Any>>(
-  mailbox: Mailbox.Mailbox<AgentEvent>,
+  mailbox: Mailbox.Mailbox<AgentEvent, AgentStreamError>,
   input: AgentInput<Tools>,
-  prompt: Prompt.Prompt
-): Effect.Effect<Option.Option<Prompt.Prompt>, AiError.AiError, LanguageModel.LanguageModel> =>
+  prompt: Prompt.Prompt,
+  turn: number
+): Effect.Effect<Option.Option<Prompt.Prompt>, AgentStreamError, LanguageModel.LanguageModel> =>
   Effect.gen(function* () {
+    const startedAt = Date.now()
+    let sawFirstPart = false
     const parts: Array<Response.StreamPart<Tools>> = []
+
+    yield* Effect.annotateCurrentSpan('turn', turn)
 
     yield* LanguageModel.streamText({
       prompt,
       toolkit: input.toolkit
     }).pipe(
+      Stream.timeoutFail(() => new StreamTimeoutError({ message: `Turn ${turn} produced no chunks in time` }), '20 seconds'),
       Stream.runForEach((part) =>
         Effect.gen(function* () {
+          if (!sawFirstPart) {
+            sawFirstPart = true
+            yield* Effect.logInfo("agent first stream part", {
+              turn,
+              latencyMs: Date.now() - startedAt,
+              type: part.type
+            })
+          }
+
           parts.push(part)
 
           const event = toEvent(part)
@@ -99,6 +117,8 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
     const finishPart = parts.find((p): p is Response.FinishPart => p.type === 'finish')
     const finishReason: Response.FinishReason = finishPart?.reason ?? 'unknown'
 
+    yield* Effect.annotateCurrentSpan("finishReason", finishReason)
+
     if (finishReason === 'tool-calls') {
       return Option.some(
         Prompt.merge(prompt, Prompt.fromResponseParts(parts))
@@ -106,7 +126,13 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
     }
 
     return Option.none()
-  })
+  }).pipe(
+    Effect.withSpan('agent.run-turn'),
+    Effect.timeoutFail({
+      duration: '60 seconds',
+      onTimeout: () => new TurnTimeoutError({ message: `Turn ${turn} timed out` })
+    })
+  )
 
 export const makeWithLanguageModelLayer = (
   languageModelLayer: Layer.Layer<LanguageModel.LanguageModel>
@@ -118,13 +144,22 @@ export const makeWithLanguageModelLayer = (
       ) =>
         Stream.unwrapScoped(
           Effect.gen(function* () {
-            const mailbox = yield* Mailbox.make<AgentEvent>()
+            const mailbox = yield* Mailbox.make<AgentEvent, AgentStreamError>()
 
             const producer = Effect.gen(function* () {
               let prompt = Prompt.make(input.prompt)
-
+              let turn = 0
               while (true) {
-                const nextPrompt = yield* runTurn(mailbox, input, prompt)
+                if (turn > 5) {
+                  yield* Effect.fail(
+                    new AgentMaxTurnsExceededError({
+                      maxTurns,
+                      message: `Agent exceeded maximum turns (${maxTurns})`
+                    })
+                  )
+                }
+
+                const nextPrompt = yield* runTurn(mailbox, input, prompt, ++turn)
 
                 if (Option.isNone(nextPrompt)) {
                   yield* mailbox.offer({ type: 'done' })
@@ -134,17 +169,21 @@ export const makeWithLanguageModelLayer = (
 
                 prompt = nextPrompt.value
               }
-            }).pipe(
-              Effect.catchAll((error) =>
-                mailbox.offer({ type: 'error', message: String(error) }).pipe(
-                  Effect.zipRight(mailbox.end),
-                  Effect.asVoid
-                )
-              ),
-              Effect.provide(languageModelLayer)
-            )
+            })
 
-            yield* Effect.forkScoped(producer)
+            yield* Effect.forkScoped(
+              producer.pipe(
+                // Capture and log the producer Exit explicitly before forwarding it to the mailbox.
+                // This makes failures/defects inside the forked producer visible during debugging
+                // instead of only surfacing later as stream-level timeouts or generic transport errors.
+                Effect.provide(languageModelLayer),
+                Effect.exit,
+                Effect.tap((exit) =>
+                  Effect.logError('agent producer exit', exit)
+                ),
+                Effect.flatMap((exit) => mailbox.done(exit))
+              )
+            )
 
             return Mailbox.toStream(mailbox)
           })

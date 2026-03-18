@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import type { Session } from "../db/schema"
-import { InternalError, MetadataJsonError, MetadataShapeError, SessionNotFoundError, SessionOwnershipError } from "../errors"
-import type { SessionMessageWithMetadata, SessionService } from "../service/session.service"
-import { getSessionTools } from "./session-tools"
+import type { Session } from "../../db/schema"
+import { InternalError, MetadataJsonError, MetadataShapeError, SessionNotFoundError, SessionOwnershipError } from "../../errors"
+import type { SessionMessageWithMetadata, SessionService } from "../../service/session.service"
+import { getAgentTools } from "."
 
 const makeSession = (overrides: Partial<Session> = {}): Session => ({
   id: overrides.id ?? "session-1",
@@ -63,7 +63,7 @@ describe("getSessionTools", () => {
       }
     })
 
-    const toolkit = await Effect.runPromise(getSessionTools("user-1", sessionService))
+    const toolkit = await Effect.runPromise(getAgentTools("user-1", sessionService))
     const result = await Effect.runPromise(toolkit.handle("list_sessions", {}))
 
     expect(result).toEqual({
@@ -125,7 +125,7 @@ describe("getSessionTools", () => {
       }
     })
 
-    const toolkit = await Effect.runPromise(getSessionTools("user-1", sessionService))
+    const toolkit = await Effect.runPromise(getAgentTools("user-1", sessionService))
     const result = await Effect.runPromise(
       toolkit.handle("get_session", { sessionId: "session-2" })
     )
@@ -180,7 +180,7 @@ describe("getSessionTools", () => {
         getSession: () => Effect.fail(testCase.error)
       })
 
-      const toolkit = await Effect.runPromise(getSessionTools("user-1", sessionService))
+      const toolkit = await Effect.runPromise(getAgentTools("user-1", sessionService))
       const result = await Effect.runPromise(
         toolkit.handle("get_session", { sessionId: "session-404" })
       )
@@ -203,7 +203,7 @@ describe("getSessionTools", () => {
         )
     })
 
-    const toolkit = await Effect.runPromise(getSessionTools("user-1", sessionService))
+    const toolkit = await Effect.runPromise(getAgentTools("user-1", sessionService))
     const result = await Effect.runPromise(toolkit.handle("list_sessions", {}))
 
     expect(result).toEqual({

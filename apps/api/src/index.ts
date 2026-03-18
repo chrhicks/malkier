@@ -7,6 +7,7 @@ import { postAgentStream } from "./handlers/post-agent-stream"
 import { SessionService } from "./service/session.service"
 
 const server = Bun.serve({
+  idleTimeout: 30,
   port: Number(Bun.env.PORT ?? 8787),
   routes: {
     "/health": () => json(200, { ok: true }),

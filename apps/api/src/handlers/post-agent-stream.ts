@@ -2,11 +2,11 @@ import { Agent, layerConfig } from "@malkier/agent"
 import { Config, Effect, Fiber, Stream } from "effect"
 import { Response as EffectResponse } from "@effect/ai"
 import { PostAgentMessageRequest } from "../schema"
-import { BadRequestError } from "../errors"
+import { BadRequestError, StreamTimeoutError } from "../errors"
 import { json } from "../request-utils"
 import { SessionService, type SessionMessageWithMetadata } from "../service/session.service"
 import { Prompt } from "@effect/ai"
-import { getSessionTools } from "../agent/session-tools"
+import { getAgentTools } from "../agent/tools"
 
 const encoder = new TextEncoder()
 
@@ -55,11 +55,13 @@ const makeStreamResponse = ({
         controller.enqueue(sseFrame(event, data))
       }
 
+      send('heartbeat', { ok: true })
+
       fiber = Effect.runFork(
         Effect.gen(function* () {
           const agent = yield* Agent
           let agentText = '';
-          const toolkit = yield* getSessionTools(userId, sessionService)
+          const toolkit = yield* getAgentTools(userId, sessionService)
           yield* agent.runStream({ prompt, toolkit }).pipe(
             Stream.runForEach((event) => {
               if (event.type === 'text-delta') {
@@ -130,13 +132,25 @@ const makeStreamResponse = ({
 
               return Effect.sync(() => send('agent-event', event))
             })
-          )
+          ),
+            Effect.withSpan('agent.stream'),
+            Effect.annotateCurrentSpan('sessionId', sessionId),
+            Effect.annotateCurrentSpan('userId', userId)
         }).pipe(
+          Effect.timeoutFail({
+            duration: '20 seconds',
+            onTimeout: () => new StreamTimeoutError({ message: 'Request stream timeout after 20 seconds' })
+          }),
+          Effect.withSpan('request.stream'),
           Effect.provide(agentLayer),
+          Effect.catchTags({
+            StreamTimeoutError: (cause) => Effect.sync(() => send('agent-event', { type: 'error', message: cause.message }))
+          }),
+          // TODO: Add catch tags to handle timeout errors. Letting catchAllCause so i can see stacks in browser
           Effect.catchAllCause((cause) =>
             sessionService.insertSessionMessage({
               sessionId,
-              message: streamFailureMessage,
+              message: cause.toString(),
               role: 'assistant',
               status: 'error',
               nextSequence: sequence++
@@ -146,7 +160,7 @@ const makeStreamResponse = ({
                 Effect.sync(() => {
                   send("agent-event", {
                     type: "error",
-                    message: streamFailureMessage
+                    message: cause.toString()
                   })
                 })
               )
