@@ -30,6 +30,13 @@ const sseFrame = (event: string, data: unknown): Uint8Array =>
 
 const streamFailureMessage = "Agent stream failed"
 
+const agentSystemPrompt = [
+  "You are Malkier, an assistant that can use tools.",
+  "When a user's request can be advanced with an available tool, call the tool instead of only describing what you would do.",
+  "If the user asks you to test, inspect, or use tools, make at least one relevant tool call before your final answer unless the request is impossible or unsafe.",
+  "Do not ask for confirmation before making a safe, relevant tool call."
+].join(" ")
+
 const formatResult = (result: unknown): string => {
   try {
     return JSON.stringify(result, null, 2)
@@ -87,6 +94,13 @@ const makeStreamResponse = ({
         const agent = yield* Agent
         let agentText = '';
         const toolkit = yield* getAgentTools(userId, sessionService)
+        const toolNames = Object.values(toolkit.tools).map((tool) => tool.name)
+
+        yield* annotateCurrentSpanAttributes({
+          "agent.tool.available_count": toolNames.length,
+          "agent.tool.names": toolNames.join(",")
+        })
+
         yield* agent.runStream({ prompt, toolkit }).pipe(
           Stream.runForEach((event) => {
             if (event.type === 'text-delta') {
@@ -319,7 +333,16 @@ export const collectPrompt = (messages: SessionMessageWithMetadata[]): Prompt.Ra
 }
 
 export const createPrompt = (messages: SessionMessageWithMetadata[]): Prompt.RawInput =>
-  collectPrompt(messages)
+  Prompt.empty.pipe(
+    Prompt.merge(
+      Prompt.fromMessages([
+        Prompt.makeMessage("system", {
+          content: agentSystemPrompt
+        })
+      ])
+    ),
+    Prompt.merge(collectPrompt(messages))
+  )
 
 export const postAgentStream = (request: Request) =>
   withHttpObservability(
