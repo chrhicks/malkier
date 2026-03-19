@@ -12,7 +12,16 @@
   },
   "dependencies": {
     "@effect/ai": "catalog:",
+    "@effect/opentelemetry": "0.61.0",
+    "@effect/platform": "catalog:",
     "@malkier/agent": "file:../../packages/agent",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/resources": "^2.6.0",
+    "@opentelemetry/sdk-logs": "^0.213.0",
+    "@opentelemetry/sdk-metrics": "^2.6.0",
+    "@opentelemetry/sdk-trace-base": "^2.6.0",
+    "@opentelemetry/sdk-trace-node": "^2.6.0",
+    "@opentelemetry/semantic-conventions": "^1.40.0",
     "drizzle-orm": "^0.44.6",
     "effect": "^3.19.19",
     "zod": "catalog:"

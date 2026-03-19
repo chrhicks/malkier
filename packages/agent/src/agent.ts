@@ -9,6 +9,23 @@ import { AgentMaxTurnsExceededError, StreamTimeoutError, TurnTimeoutError } from
 
 const maxTurns = 5
 
+type SpanAttributeValue = string | number | boolean | undefined
+
+type LanguageModelMetadata = {
+  readonly model?: string
+  readonly provider?: string
+}
+
+const annotateCurrentSpanAttributes = (attributes: Record<string, SpanAttributeValue>) =>
+  Effect.forEach(
+    Object.entries(attributes),
+    ([key, value]) =>
+      value === undefined
+        ? Effect.void
+        : Effect.annotateCurrentSpan(key, value),
+    { discard: true }
+  )
+
 export class Agent extends Context.Tag("@malkier/agent/Agent")<Agent, Agent.Service>() { }
 
 export declare namespace Agent {
@@ -79,14 +96,22 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
   mailbox: Mailbox.Mailbox<AgentEvent, AgentStreamError>,
   input: AgentInput<Tools>,
   prompt: Prompt.Prompt,
-  turn: number
+  turn: number,
+  metadata?: LanguageModelMetadata
 ): Effect.Effect<Option.Option<Prompt.Prompt>, AgentStreamError, LanguageModel.LanguageModel> =>
   Effect.gen(function* () {
     const startedAt = Date.now()
     let sawFirstPart = false
+    let firstChunkLatencyMs: number | undefined = undefined
+    let textDeltaCount = 0
+    let toolCallCount = 0
     const parts: Array<Response.StreamPart<Tools>> = []
 
-    yield* Effect.annotateCurrentSpan('turn', turn)
+    yield* annotateCurrentSpanAttributes({
+      "agent.turn": turn,
+      "llm.model": metadata?.model,
+      "llm.provider": metadata?.provider
+    })
 
     yield* LanguageModel.streamText({
       prompt,
@@ -97,11 +122,20 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
         Effect.gen(function* () {
           if (!sawFirstPart) {
             sawFirstPart = true
+            firstChunkLatencyMs = Date.now() - startedAt
             yield* Effect.logInfo("agent first stream part", {
               turn,
-              latencyMs: Date.now() - startedAt,
+              latencyMs: firstChunkLatencyMs,
               type: part.type
             })
+          }
+
+          if (part.type === 'text-delta') {
+            textDeltaCount += 1
+          }
+
+          if (part.type === 'tool-call') {
+            toolCallCount += 1
           }
 
           parts.push(part)
@@ -117,7 +151,12 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
     const finishPart = parts.find((p): p is Response.FinishPart => p.type === 'finish')
     const finishReason: Response.FinishReason = finishPart?.reason ?? 'unknown'
 
-    yield* Effect.annotateCurrentSpan("finishReason", finishReason)
+    yield* annotateCurrentSpanAttributes({
+      "llm.finish_reason": finishReason,
+      "agent.tool_call_count": toolCallCount,
+      "agent.text_delta_count": textDeltaCount,
+      "agent.first_chunk_latency_ms": firstChunkLatencyMs
+    })
 
     if (finishReason === 'tool-calls') {
       return Option.some(
@@ -135,7 +174,8 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
   )
 
 export const makeWithLanguageModelLayer = (
-  languageModelLayer: Layer.Layer<LanguageModel.LanguageModel>
+  languageModelLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  metadata?: LanguageModelMetadata
 ): Effect.Effect<Agent.Service> =>
   Effect.succeed(
     Agent.of({
@@ -159,7 +199,7 @@ export const makeWithLanguageModelLayer = (
                   )
                 }
 
-                const nextPrompt = yield* runTurn(mailbox, input, prompt, ++turn)
+                const nextPrompt = yield* runTurn(mailbox, input, prompt, ++turn, metadata)
 
                 if (Option.isNone(nextPrompt)) {
                   yield* mailbox.offer({ type: 'done' })
@@ -192,7 +232,10 @@ export const makeWithLanguageModelLayer = (
   )
 
 export const make = (options: Agent.Options): Effect.Effect<Agent.Service> =>
-  makeWithLanguageModelLayer(providerLayer(options))
+  makeWithLanguageModelLayer(providerLayer(options), {
+    model: options.model,
+    provider: "openai"
+  })
 
 export const layer = (options: Agent.Options): Layer.Layer<Agent> =>
   Layer.effect(Agent, make(options))

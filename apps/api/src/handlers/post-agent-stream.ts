@@ -1,12 +1,17 @@
 import { Agent, layerConfig } from "@malkier/agent"
-import { Config, Effect, Fiber, Stream } from "effect"
+import { Tracer as OtelTracer } from "@effect/opentelemetry"
+import { Config, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { Response as EffectResponse } from "@effect/ai"
+import type { SpanContext } from "@opentelemetry/api"
 import { PostAgentMessageRequest } from "../schema"
-import { BadRequestError, StreamTimeoutError } from "../errors"
+import { BadRequestError, InternalError, SessionOwnershipError, StreamTimeoutError } from "../errors"
+import { annotateCurrentSpanAttributes } from "../observability/span-attributes"
 import { json } from "../request-utils"
 import { SessionService, type SessionMessageWithMetadata } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import { getAgentTools } from "../agent/tools"
+import { HoneycombObservabilityLive } from "../observability/honeycomb"
+import withHttpObservability from "../server/http-observability"
 
 const encoder = new TextEncoder()
 
@@ -33,18 +38,32 @@ const formatResult = (result: unknown): string => {
   }
 }
 
+const withEventSpan = <A, E, R>(
+  name: string,
+  attributes: Record<string, string | number | boolean | undefined>,
+  effect: Effect.Effect<A, E, R>
+) =>
+  Effect.gen(function* () {
+    yield* annotateCurrentSpanAttributes(attributes)
+    return yield* effect
+  }).pipe(Effect.withSpan(name))
+
 const makeStreamResponse = ({
   userId,
   sessionId,
   prompt,
+  promptMessageCount,
   nextSequence,
-  sessionService
+  sessionService,
+  parentSpanContext
 }: {
   userId: string
   sessionId: string
   prompt: Prompt.RawInput
+  promptMessageCount: number
   nextSequence: number
   sessionService: SessionService
+  parentSpanContext?: SpanContext
 }) => {
   let fiber: Fiber.RuntimeFiber<void, never> | null = null
   let sequence = nextSequence
@@ -57,20 +76,34 @@ const makeStreamResponse = ({
 
       send('heartbeat', { ok: true })
 
-      fiber = Effect.runFork(
-        Effect.gen(function* () {
-          const agent = yield* Agent
-          let agentText = '';
-          const toolkit = yield* getAgentTools(userId, sessionService)
-          yield* agent.runStream({ prompt, toolkit }).pipe(
-            Stream.runForEach((event) => {
-              if (event.type === 'text-delta') {
-                agentText += event.delta
-                return Effect.sync(() => send('agent-event', event))
-              }
+      const baseStreamEffect = Effect.gen(function* () {
+        yield* annotateCurrentSpanAttributes({
+          "session.id": sessionId,
+          "user.id": userId,
+          "agent.stream.sequence_start": nextSequence,
+          "agent.prompt.message_count": promptMessageCount
+        })
 
-              if (event.type === 'tool-call') {
-                return sessionService.insertSessionMessage({
+        const agent = yield* Agent
+        let agentText = '';
+        const toolkit = yield* getAgentTools(userId, sessionService)
+        yield* agent.runStream({ prompt, toolkit }).pipe(
+          Stream.runForEach((event) => {
+            if (event.type === 'text-delta') {
+              agentText += event.delta
+              return Effect.sync(() => send('agent-event', event))
+            }
+
+            if (event.type === 'tool-call') {
+              return withEventSpan(
+                'agent.tool-call',
+                {
+                  "session.id": sessionId,
+                  "user.id": userId,
+                  "tool.name": event.name,
+                  "tool.call.id": event.id
+                },
+                sessionService.insertSessionMessage({
                   sessionId,
                   message: `Calling ${event.name}`,
                   role: 'assistant',
@@ -85,10 +118,20 @@ const makeStreamResponse = ({
                 }).pipe(
                   Effect.zipRight(Effect.sync(() => send('agent-event', event)))
                 )
-              }
+              )
+            }
 
-              if (event.type === 'tool-result') {
-                return sessionService.insertSessionMessage({
+            if (event.type === 'tool-result') {
+              return withEventSpan(
+                'agent.tool-result',
+                {
+                  "session.id": sessionId,
+                  "user.id": userId,
+                  "tool.name": event.name,
+                  "tool.call.id": event.id,
+                  "tool.result.is_failure": event.isFailure
+                },
+                sessionService.insertSessionMessage({
                   sessionId,
                   message: formatResult(event.result),
                   role: 'tool',
@@ -104,22 +147,31 @@ const makeStreamResponse = ({
                 }).pipe(
                   Effect.zipRight(Effect.sync(() => send('agent-event', event)))
                 )
-              }
+              )
+            }
 
-              if (event.type === 'done') {
-                return sessionService.insertSessionMessage({
-                  sessionId,
-                  message: agentText,
-                  role: 'assistant',
-                  status: 'complete',
-                  nextSequence: sequence++
-                }).pipe(
-                  Effect.zipRight(Effect.sync(() => send('agent-event', event)))
-                )
-              }
+            if (event.type === 'done') {
+              return sessionService.insertSessionMessage({
+                sessionId,
+                message: agentText,
+                role: 'assistant',
+                status: 'complete',
+                nextSequence: sequence++
+              }).pipe(
+                Effect.zipRight(Effect.sync(() => send('agent-event', event)))
+              )
+            }
 
-              if (event.type === 'error') {
-                return sessionService.insertSessionMessage({
+            if (event.type === 'error') {
+              return withEventSpan(
+                'agent.error',
+                {
+                  "session.id": sessionId,
+                  "user.id": userId,
+                  "error.type": 'agent-event',
+                  "error.message": event.message
+                },
+                sessionService.insertSessionMessage({
                   sessionId,
                   message: event.message,
                   role: 'assistant',
@@ -128,41 +180,59 @@ const makeStreamResponse = ({
                 }).pipe(
                   Effect.zipRight(Effect.sync(() => send('agent-event', event)))
                 )
-              }
+              )
+            }
 
-              return Effect.sync(() => send('agent-event', event))
-            })
-          ),
-            Effect.withSpan('agent.stream'),
-            Effect.annotateCurrentSpan('sessionId', sessionId),
-            Effect.annotateCurrentSpan('userId', userId)
-        }).pipe(
+            return Effect.sync(() => send('agent-event', event))
+          })
+        )
+      }).pipe(Effect.withSpan('agent.stream'))
+
+      const streamEffect = parentSpanContext === undefined
+        ? baseStreamEffect
+        : OtelTracer.withSpanContext(baseStreamEffect, parentSpanContext)
+
+      fiber = Effect.runFork(
+        streamEffect.pipe(
           Effect.timeoutFail({
             duration: '20 seconds',
             onTimeout: () => new StreamTimeoutError({ message: 'Request stream timeout after 20 seconds' })
           }),
           Effect.withSpan('request.stream'),
-          Effect.provide(agentLayer),
+          Effect.provide(Layer.mergeAll(agentLayer, HoneycombObservabilityLive)),
           Effect.catchTags({
-            StreamTimeoutError: (cause) => Effect.sync(() => send('agent-event', { type: 'error', message: cause.message }))
+            StreamTimeoutError: (cause) =>
+              annotateCurrentSpanAttributes({
+                "error.type": 'stream-timeout',
+                "error.message": cause.message
+              }).pipe(
+                Effect.zipRight(Effect.sync(() => send('agent-event', { type: 'error', message: cause.message })))
+              )
           }),
           // TODO: Add catch tags to handle timeout errors. Letting catchAllCause so i can see stacks in browser
           Effect.catchAllCause((cause) =>
-            sessionService.insertSessionMessage({
-              sessionId,
-              message: cause.toString(),
-              role: 'assistant',
-              status: 'error',
-              nextSequence: sequence++
+            annotateCurrentSpanAttributes({
+              "error.type": 'stream-failure',
+              "error.message": cause.toString()
             }).pipe(
-              Effect.catchAll(() => Effect.void),
               Effect.zipRight(
-                Effect.sync(() => {
-                  send("agent-event", {
-                    type: "error",
-                    message: cause.toString()
-                  })
-                })
+                sessionService.insertSessionMessage({
+                  sessionId,
+                  message: cause.toString(),
+                  role: 'assistant',
+                  status: 'error',
+                  nextSequence: sequence++
+                }).pipe(
+                  Effect.catchAll(() => Effect.void),
+                  Effect.zipRight(
+                    Effect.sync(() => {
+                      send("agent-event", {
+                        type: "error",
+                        message: cause.toString()
+                      })
+                    })
+                  )
+                )
               )
             )
           ),
@@ -252,45 +322,72 @@ export const createPrompt = (messages: SessionMessageWithMetadata[]): Prompt.Raw
   collectPrompt(messages)
 
 export const postAgentStream = (request: Request) =>
-  Effect.gen(function* () {
-    const body = yield* Effect.tryPromise({
-      try: () => request.json(),
-      catch: () => new BadRequestError({ message: 'Invalid JSON body' })
+  withHttpObservability(
+    'http.post-agent-stream',
+    {
+      "http.request.method": request.method,
+      "http.route": "/api/agent/stream",
+      "url.full": request.url
+    },
+    Effect.gen(function* () {
+      const body = yield* Effect.tryPromise({
+        try: () => request.json(),
+        catch: () => new BadRequestError({ message: 'Invalid JSON body' })
+      })
+
+      const parsed = yield* Effect.try({
+        try: () => PostAgentMessageRequest.parse(body),
+        catch: (error) => new BadRequestError({ message: `Invalid request body: ${String(error)}` })
+      })
+
+      const sessionService = yield* SessionService
+
+      const session = yield* SessionService.ensureSession({
+        userId: parsed.userId,
+        sessionId: parsed.sessionId
+      })
+
+      yield* annotateCurrentSpanAttributes({
+        "user.id": parsed.userId,
+        "session.id": session.sessionId,
+        "session.is_new": session.isNew,
+        "message.role": 'user'
+      })
+
+      const nextSequence = yield* SessionService.nextMessageSequence(session.sessionId)
+
+      yield* SessionService.insertSessionMessage({
+        message: parsed.message,
+        role: 'user',
+        sessionId: session.sessionId,
+        status: 'complete',
+        nextSequence
+      })
+
+      const loadedSession = yield* SessionService.getSession({
+        userId: parsed.userId,
+        sessionId: session.sessionId
+      })
+      const prompt = createPrompt(loadedSession.messages)
+      const parentSpan = yield* OtelTracer.currentOtelSpan.pipe(
+        Effect.map((span) => span.spanContext()),
+        Effect.option
+      )
+
+      return makeStreamResponse({
+        sessionService,
+        prompt,
+        promptMessageCount: loadedSession.messages.length,
+        userId: parsed.userId,
+        sessionId: session.sessionId,
+        nextSequence: nextSequence + 1,
+        parentSpanContext: Option.match(parentSpan, {
+          onNone: () => undefined,
+          onSome: (spanContext) => spanContext
+        })
+      })
     })
-
-    const parsed = yield* Effect.try({
-      try: () => PostAgentMessageRequest.parse(body),
-      catch: (error) => new BadRequestError({ message: `Invalid request body: ${String(error)}` })
-    })
-
-    const sessionService = yield* SessionService
-
-    const sessionId = yield* SessionService.ensureSession({
-      userId: parsed.userId,
-      sessionId: parsed.sessionId
-    })
-
-    const nextSequence = yield* SessionService.nextMessageSequence(sessionId)
-
-    yield* SessionService.insertSessionMessage({
-      message: parsed.message,
-      role: 'user',
-      sessionId,
-      status: 'complete',
-      nextSequence
-    })
-
-    const session = yield* SessionService.getSession({ userId: parsed.userId, sessionId })
-    const prompt = createPrompt(session.messages)
-
-    return makeStreamResponse({
-      sessionService,
-      prompt,
-      userId: parsed.userId,
-      sessionId,
-      nextSequence: nextSequence + 1
-    })
-  }).pipe(
+  ).pipe(
     Effect.catchTags({
       BadRequestError: (error) =>
         Effect.succeed(json(400, { error: error.message })),

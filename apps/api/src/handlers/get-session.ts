@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { BadRequestError } from "../errors"
+import { BadRequestError, InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
 import { json } from "../request-utils"
 import { SessionRouteParams, SessionUserQuery } from "../schema"
 import { SessionService } from "../service/session.service"
@@ -9,8 +9,10 @@ export const getSession = (request: Bun.BunRequest<"/api/sessions/:sessionId">) 
   withHttpObservability(
     'http.get-session',
     {
-      url: request.url,
-      sessionId: request.params.sessionId
+      "http.request.method": request.method,
+      "http.route": "/api/sessions/:sessionId",
+      "url.full": request.url,
+      "session.id": request.params.sessionId
     },
     Effect.gen(function* () {
       const url = new URL(request.url)
@@ -19,6 +21,8 @@ export const getSession = (request: Bun.BunRequest<"/api/sessions/:sessionId">) 
         try: () => SessionUserQuery.parse({ userId: url.searchParams.get("userId") }),
         catch: (error) => new BadRequestError({ message: `Invalid request query: ${String(error)}` })
       })
+
+      yield* Effect.annotateCurrentSpan("user.id", query.userId)
 
       const params = yield* Effect.try({
         try: () => SessionRouteParams.parse(request.params),
@@ -29,6 +33,8 @@ export const getSession = (request: Bun.BunRequest<"/api/sessions/:sessionId">) 
         userId: query.userId,
         sessionId: params.sessionId
       })
+
+      yield* Effect.annotateCurrentSpan("session.lookup.found", true)
 
       return json(200, session)
     })
@@ -47,4 +53,3 @@ export const getSession = (request: Bun.BunRequest<"/api/sessions/:sessionId">) 
       Effect.succeed(json(500, { error: "Unexpected error" }))
     )
   )
-

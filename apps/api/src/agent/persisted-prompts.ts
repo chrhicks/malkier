@@ -23,24 +23,22 @@ export const PromptMetadata = Schema.Union(
 
 export type PromptMetadata = Schema.Schema.Type<typeof PromptMetadata>
 
-export const decodeToolMetadata = Effect.fn('PersistedPrompts.decodeToolMetadata')(
-  (metadata: string) =>
-    Effect.try({
-      try: () => JSON.parse(metadata),
-      catch: (cause) =>
-        new MetadataJsonError({
-          message: `Invalid persisted metadata JSON: ${String(cause)}`
-        })
-    }).pipe(
-      Effect.flatMap((parsed) =>
-        Schema.decodeUnknown(PromptMetadata)(parsed).pipe(
-          Effect.mapError(
-            () =>
-              new MetadataShapeError({
-                message: `Persisted metadata does not match PromptMetadata schema`
-              })
-          )
+export const decodeToolMetadata = (metadata: string) =>
+  Effect.try({
+    try: () => JSON.parse(metadata),
+    catch: (cause) =>
+      new MetadataJsonError({
+        message: `Invalid persisted metadata JSON: ${String(cause)}`
+      })
+  }).pipe(
+    Effect.flatMap((parsed) =>
+      Schema.decodeUnknown(PromptMetadata)(parsed).pipe(
+        Effect.mapError(
+          () =>
+            new MetadataShapeError({
+              message: `Persisted metadata does not match PromptMetadata schema`
+            })
         )
       )
     )
-)
+  )
