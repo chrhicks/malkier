@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { stat } from "node:fs/promises"
+import { mkdir, rm, stat } from "node:fs/promises"
 import { isAbsolute, normalize, relative, resolve } from "node:path"
 import { Tool, Toolkit } from "@effect/ai"
 import { Effect, Schema } from "effect"
@@ -159,13 +159,6 @@ const catchFileToolErrors = <A>(
     })
   )
 
-const StubHint: ToolHint = {
-  code: "stub-contract",
-  message: "This file tool is currently a typed stub. Implement the handler before exposing it in the live agent toolkit.",
-  suggestedTool: null,
-  suggestedArgs: null
-}
-
 const normalizeWorkspacePath = (path: string) => path.replaceAll("\\", "/")
 
 const sanitizePositiveInt = (value: number | null, fallback: number) => {
@@ -186,6 +179,74 @@ const truncateSearchLine = (line: string) =>
 type IgnoreRule = {
   readonly negate: boolean
   readonly matchers: ReadonlyArray<Bun.Glob>
+}
+
+type WorkspaceTarget = {
+  readonly absolutePath: string
+  readonly workspacePath: string
+}
+
+type WorkspaceTextFile = {
+  readonly path: string
+  readonly content: string
+}
+
+type WorkspaceFileSnapshot = WorkspaceTextFile & {
+  readonly snapshotId: SnapshotId
+}
+
+type ParsedPatchLine = {
+  readonly kind: "context" | "add" | "remove"
+  readonly content: string
+}
+
+type ParsedPatchHunk = {
+  readonly anchor: string | null
+  readonly lines: ReadonlyArray<ParsedPatchLine>
+}
+
+type ParsedPatchOperation =
+  | {
+    readonly kind: "add"
+    readonly path: string
+    readonly content: string
+  }
+  | {
+    readonly kind: "delete"
+    readonly path: string
+  }
+  | {
+    readonly kind: "update"
+    readonly path: string
+    readonly hunks: ReadonlyArray<ParsedPatchHunk>
+  }
+
+type PatchPreview = {
+  readonly content: string
+  readonly addedLines: number
+  readonly removedLines: number
+}
+
+type PatchPlan = {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly content: string
+  readonly addedLines: number
+  readonly removedLines: number
+}
+
+type ApplyPatchGuidanceReason =
+  | "missing-read-context"
+  | "stale-read-context"
+  | "patch-context-not-found"
+  | "patch-context-ambiguous"
+  | "create-not-allowed"
+  | "delete-not-allowed"
+  | "not-implemented"
+
+type ApplyPatchGuidanceFile = {
+  readonly path: string
+  readonly reason: ApplyPatchGuidanceReason
 }
 
 const buildIgnoreMatchers = (pattern: string, directoryOnly: boolean) => {
@@ -317,7 +378,31 @@ const makeReadMoreHint = (path: string, nextStartLine: number, maxLines: number)
   }
 })
 
-const makeStubHints = (): Array<ToolHint> => [StubHint]
+const makeReadFileHint = (path: string, message: string): ToolHint => ({
+  code: "read-file",
+  message,
+  suggestedTool: "read_file",
+  suggestedArgs: {
+    path,
+    startLine: 1,
+    maxLines: defaultReadLines
+  }
+})
+
+const dedupeHints = (hints: ReadonlyArray<ToolHint>) => {
+  const seen = new Set<string>()
+
+  return hints.filter((hint) => {
+    const key = JSON.stringify(hint)
+
+    if (seen.has(key)) {
+      return false
+    }
+
+    seen.add(key)
+    return true
+  })
+}
 
 const resolveWorkspaceTarget = Effect.fn("FileTools.resolveWorkspaceTarget")(function* (inputPath: string) {
   const trimmedPath = inputPath.trim()
@@ -358,6 +443,12 @@ const resolveWorkspaceTarget = Effect.fn("FileTools.resolveWorkspaceTarget")(fun
   }
 })
 
+const resolveVisibleWorkspaceTarget = Effect.fn("FileTools.resolveVisibleWorkspaceTarget")(function* (inputPath: string) {
+  const target = yield* resolveWorkspaceTarget(inputPath)
+  yield* ensureVisibleWorkspacePath(target.workspacePath)
+  return target
+})
+
 const readPathStat = Effect.fn("FileTools.readPathStat")(function* (absolutePath: string, workspacePath: string) {
   return yield* Effect.tryPromise({
     try: () => stat(absolutePath),
@@ -377,9 +468,14 @@ const readPathStat = Effect.fn("FileTools.readPathStat")(function* (absolutePath
   })
 })
 
+const readOptionalPathStat = Effect.fn("FileTools.readOptionalPathStat")(function* (absolutePath: string, workspacePath: string) {
+  return yield* readPathStat(absolutePath, workspacePath).pipe(
+    Effect.catchTag("FileNotFoundError", () => Effect.succeed(null))
+  )
+})
+
 const ensureFileTarget = Effect.fn("FileTools.ensureFileTarget")(function* (inputPath: string) {
-  const target = yield* resolveWorkspaceTarget(inputPath)
-  yield* ensureVisibleWorkspacePath(target.workspacePath)
+  const target = yield* resolveVisibleWorkspaceTarget(inputPath)
   const pathStat = yield* readPathStat(target.absolutePath, target.workspacePath)
 
   if (!pathStat.isFile()) {
@@ -395,8 +491,7 @@ const ensureFileTarget = Effect.fn("FileTools.ensureFileTarget")(function* (inpu
 })
 
 const ensureDirectoryTarget = Effect.fn("FileTools.ensureDirectoryTarget")(function* (inputPath: string) {
-  const target = yield* resolveWorkspaceTarget(inputPath)
-  yield* ensureVisibleWorkspacePath(target.workspacePath)
+  const target = yield* resolveVisibleWorkspaceTarget(inputPath)
   const pathStat = yield* readPathStat(target.absolutePath, target.workspacePath)
 
   if (!pathStat.isDirectory()) {
@@ -411,8 +506,7 @@ const ensureDirectoryTarget = Effect.fn("FileTools.ensureDirectoryTarget")(funct
   return target
 })
 
-const readWorkspaceTextFile = Effect.fn("FileTools.readWorkspaceTextFile")(function* (workspacePath: string) {
-  const target = yield* ensureFileTarget(workspacePath)
+const readResolvedWorkspaceTextFile = Effect.fn("FileTools.readResolvedWorkspaceTextFile")(function* (target: WorkspaceTarget) {
   const bytes = yield* Effect.tryPromise({
     try: () => Bun.file(target.absolutePath).bytes(),
     catch: (cause) =>
@@ -443,7 +537,102 @@ const readWorkspaceTextFile = Effect.fn("FileTools.readWorkspaceTextFile")(funct
   return {
     path: target.workspacePath,
     content
+  } satisfies WorkspaceTextFile
+})
+
+const readWorkspaceTextFile = Effect.fn("FileTools.readWorkspaceTextFile")(function* (workspacePath: string) {
+  const target = yield* ensureFileTarget(workspacePath)
+  return yield* readResolvedWorkspaceTextFile(target)
+})
+
+const readOptionalWorkspaceFileSnapshot = Effect.fn("FileTools.readOptionalWorkspaceFileSnapshot")(function* (target: WorkspaceTarget) {
+  const pathStat = yield* readOptionalPathStat(target.absolutePath, target.workspacePath)
+
+  if (pathStat == null) {
+    return null
   }
+
+  if (!pathStat.isFile()) {
+    return yield* Effect.fail(
+      new InvalidPathError({
+        path: target.workspacePath,
+        message: `Expected a file path: ${target.workspacePath}`
+      })
+    )
+  }
+
+  const file = yield* readResolvedWorkspaceTextFile(target)
+
+  return {
+    ...file,
+    snapshotId: makeSnapshotId(file.content)
+  } satisfies WorkspaceFileSnapshot
+})
+
+const ensureParentDirectories = Effect.fn("FileTools.ensureParentDirectories")(function* (target: WorkspaceTarget, createParents: boolean) {
+  const segments = target.workspacePath.split("/").slice(0, -1)
+  const createdParents: Array<string> = []
+
+  for (let index = 1; index <= segments.length; index++) {
+    const parentPath = segments.slice(0, index).join("/")
+    const parentTarget = yield* resolveVisibleWorkspaceTarget(parentPath)
+    const pathStat = yield* readOptionalPathStat(parentTarget.absolutePath, parentTarget.workspacePath)
+
+    if (pathStat == null) {
+      if (!createParents) {
+        return yield* Effect.fail(
+          new InvalidPathError({
+            path: target.workspacePath,
+            message: `Parent directory does not exist: ${parentTarget.workspacePath}`
+          })
+        )
+      }
+
+      yield* Effect.tryPromise({
+        try: () => mkdir(parentTarget.absolutePath),
+        catch: (cause) =>
+          new FileIoError({
+            path: parentTarget.workspacePath,
+            message: `Unable to create directory ${parentTarget.workspacePath}: ${String(cause)}`
+          })
+      })
+      createdParents.push(parentTarget.workspacePath)
+      continue
+    }
+
+    if (!pathStat.isDirectory()) {
+      return yield* Effect.fail(
+        new InvalidPathError({
+          path: parentTarget.workspacePath,
+          message: `Expected a directory path: ${parentTarget.workspacePath}`
+        })
+      )
+    }
+  }
+
+  return createdParents
+})
+
+const writeResolvedWorkspaceTextFile = Effect.fn("FileTools.writeResolvedWorkspaceTextFile")(function* (target: WorkspaceTarget, content: string) {
+  yield* Effect.tryPromise({
+    try: () => Bun.write(target.absolutePath, content),
+    catch: (cause) =>
+      new FileIoError({
+        path: target.workspacePath,
+        message: `Unable to write ${target.workspacePath}: ${String(cause)}`
+      })
+  })
+})
+
+const deleteResolvedWorkspaceFile = Effect.fn("FileTools.deleteResolvedWorkspaceFile")(function* (target: WorkspaceTarget) {
+  yield* Effect.tryPromise({
+    try: () => rm(target.absolutePath),
+    catch: (cause) =>
+      new FileIoError({
+        path: target.workspacePath,
+        message: `Unable to delete ${target.workspacePath}: ${String(cause)}`
+      })
+  })
 })
 
 const listMatchingFiles = Effect.fn("FileTools.listMatchingFiles")(function* ({
@@ -504,6 +693,357 @@ const listMatchingFiles = Effect.fn("FileTools.listMatchingFiles")(function* ({
       })
   })
 })
+
+const splitContentLines = (content: string) => content.split(/\r?\n/)
+
+const splitVisibleContentLines = (content: string) => {
+  if (content.length === 0) {
+    return []
+  }
+
+  const lines = splitContentLines(content)
+
+  if (content.endsWith("\n") && lines.at(-1) === "") {
+    lines.pop()
+  }
+
+  return lines
+}
+
+const countContentLines = (content: string) => splitVisibleContentLines(content).length
+
+const buildReadFileContent = (lines: ReadonlyArray<string>, hasTrailingNewline: boolean, reachesFileEnd: boolean) => {
+  if (lines.length === 0) {
+    return ""
+  }
+
+  return `${lines.join("\n")}${hasTrailingNewline && reachesFileEnd ? "\n" : ""}`
+}
+
+const detectLineEnding = (content: string) => content.includes("\r\n") ? "\r\n" : "\n"
+
+const invalidPatch = (message: string, path: string | null = null) =>
+  new InvalidPatchError({ path, message })
+
+const makeApplyPatchGuidanceMessage = (reasons: ReadonlyArray<ApplyPatchGuidanceReason>) => {
+  const uniqueReasons = new Set(reasons)
+
+  if (uniqueReasons.size === 1) {
+    const reason = reasons[0]
+
+    switch (reason) {
+      case "missing-read-context":
+      case "stale-read-context":
+        return "apply_patch needs a fresh read of the target file before it can proceed."
+      case "patch-context-not-found":
+        return "apply_patch could not find the requested patch context in the current file contents."
+      case "patch-context-ambiguous":
+        return "apply_patch found multiple matches for the requested patch context in the current file contents."
+      case "create-not-allowed":
+        return "apply_patch only updates existing files. Use write_file to create new files instead."
+      case "delete-not-allowed":
+        return "apply_patch does not delete files. Use delete_file instead."
+      case "not-implemented":
+        return "apply_patch is specified but not implemented yet."
+    }
+  }
+
+  return "apply_patch needs fresher read context or a different mutation tool before it can proceed."
+}
+
+const isPatchSectionHeader = (line: string) =>
+  line.startsWith("*** Add File: ")
+  || line.startsWith("*** Update File: ")
+  || line.startsWith("*** Delete File: ")
+  || line === "*** End Patch"
+
+const trimTrailingBlankPatchLines = (lines: Array<string>) => {
+  while (lines.at(-1) === "") {
+    lines.pop()
+  }
+
+  return lines
+}
+
+const parsePatchAnchor = (line: string) => {
+  const rawAnchor = line.slice(2)
+  const anchor = rawAnchor.startsWith(" ") ? rawAnchor.slice(1) : rawAnchor
+  return anchor.length === 0 ? null : anchor
+}
+
+const parsePatchHunks = (path: string, lines: ReadonlyArray<string>): Array<ParsedPatchHunk> => {
+  if (lines.length === 0) {
+    throw invalidPatch(`Update patch for ${path} must include at least one hunk.`, path)
+  }
+
+  const hunks: Array<ParsedPatchHunk> = []
+  let index = 0
+
+  while (index < lines.length) {
+    const header = lines[index]
+
+    if (header == null || !header.startsWith("@@")) {
+      throw invalidPatch(`Invalid hunk header for ${path}: ${String(header)}`, path)
+    }
+
+    index += 1
+    const hunkLines: Array<ParsedPatchLine> = []
+
+    while (index < lines.length) {
+      const line = lines[index]
+
+      if (line == null || line.startsWith("@@")) {
+        break
+      }
+
+      const prefix = line[0]
+
+      if (prefix !== " " && prefix !== "+" && prefix !== "-") {
+        throw invalidPatch(`Invalid patch line for ${path}: ${line}`, path)
+      }
+
+      hunkLines.push({
+        kind: prefix === " " ? "context" : prefix === "+" ? "add" : "remove",
+        content: line.slice(1)
+      })
+      index += 1
+    }
+
+    if (hunkLines.length === 0) {
+      throw invalidPatch(`Patch hunk for ${path} must include at least one line.`, path)
+    }
+
+    if (parsePatchAnchor(header) == null && hunkLines.every((line) => line.kind === "add")) {
+      throw invalidPatch(`Patch hunk for ${path} must include context or removals.`, path)
+    }
+
+    hunks.push({
+      anchor: parsePatchAnchor(header),
+      lines: hunkLines
+    })
+  }
+
+  return hunks
+}
+
+const parsePatchText = (patch: string): Array<ParsedPatchOperation> => {
+  const lines = trimTrailingBlankPatchLines(patch.split(/\r?\n/))
+
+  if (lines[0] !== "*** Begin Patch") {
+    throw invalidPatch("Patch must begin with *** Begin Patch.")
+  }
+
+  if (lines.at(-1) !== "*** End Patch") {
+    throw invalidPatch("Patch must end with *** End Patch.")
+  }
+
+  const operations: Array<ParsedPatchOperation> = []
+  let index = 1
+
+  while (index < lines.length - 1) {
+    const line = lines[index]
+
+    if (line == null) {
+      break
+    }
+
+    if (line.length === 0) {
+      index += 1
+      continue
+    }
+
+    if (line.startsWith("*** Add File: ")) {
+      const path = line.slice("*** Add File: ".length).trim()
+
+      if (path.length === 0) {
+        throw invalidPatch("Add File section must include a path.")
+      }
+
+      index += 1
+      const body: Array<string> = []
+      while (index < lines.length - 1) {
+        const candidate = lines[index]
+        if (candidate != null && isPatchSectionHeader(candidate)) {
+          break
+        }
+        body.push(candidate ?? "")
+        index += 1
+      }
+
+      if (!body.every((entry) => entry.startsWith("+"))) {
+        throw invalidPatch(`Add File section for ${path} must contain only '+' lines.`, path)
+      }
+
+      operations.push({
+        kind: "add",
+        path,
+        content: body.map((entry) => entry.slice(1)).join("\n")
+      })
+      continue
+    }
+
+    if (line.startsWith("*** Delete File: ")) {
+      const path = line.slice("*** Delete File: ".length).trim()
+
+      if (path.length === 0) {
+        throw invalidPatch("Delete File section must include a path.")
+      }
+
+      operations.push({ kind: "delete", path })
+      index += 1
+      continue
+    }
+
+    if (line.startsWith("*** Update File: ")) {
+      const path = line.slice("*** Update File: ".length).trim()
+
+      if (path.length === 0) {
+        throw invalidPatch("Update File section must include a path.")
+      }
+
+      index += 1
+      const body: Array<string> = []
+      while (index < lines.length - 1) {
+        const candidate = lines[index]
+        if (candidate != null && isPatchSectionHeader(candidate)) {
+          break
+        }
+        body.push(candidate ?? "")
+        index += 1
+      }
+
+      if (body[0]?.startsWith("*** Move to: ")) {
+        throw invalidPatch(`apply_patch does not support move operations for ${path}.`, path)
+      }
+
+      operations.push({
+        kind: "update",
+        path,
+        hunks: parsePatchHunks(path, body)
+      })
+      continue
+    }
+
+    throw invalidPatch(`Unknown patch section: ${line}`)
+  }
+
+  if (operations.length === 0) {
+    throw invalidPatch("Patch must include at least one file operation.")
+  }
+
+  return operations
+}
+
+type SequenceMatchResult =
+  | {
+    readonly kind: "match"
+    readonly index: number
+  }
+  | {
+    readonly kind: "not-found"
+  }
+  | {
+    readonly kind: "ambiguous"
+  }
+
+const findUniqueSequenceMatch = (
+  lines: ReadonlyArray<string>,
+  sequence: ReadonlyArray<string>,
+  startIndex: number
+): SequenceMatchResult => {
+  let matchIndex: number | null = null
+
+  for (let index = startIndex; index + sequence.length <= lines.length; index++) {
+    let matched = true
+
+    for (let offset = 0; offset < sequence.length; offset++) {
+      if (lines[index + offset] !== sequence[offset]) {
+        matched = false
+        break
+      }
+    }
+
+    if (!matched) {
+      continue
+    }
+
+    if (matchIndex != null) {
+      return { kind: "ambiguous" }
+    }
+
+    matchIndex = index
+  }
+
+  return matchIndex == null
+    ? { kind: "not-found" }
+    : { kind: "match", index: matchIndex }
+}
+
+type PatchPreviewFailure = {
+  readonly reason: Extract<ApplyPatchGuidanceReason, "patch-context-not-found" | "patch-context-ambiguous">
+}
+
+type PatchPreviewResult = PatchPreview | PatchPreviewFailure
+
+const isPatchPreviewFailure = (result: PatchPreviewResult): result is PatchPreviewFailure =>
+  "reason" in result
+
+const makePatchPreviewReadHintMessage = (path: string, reason: PatchPreviewFailure["reason"]) =>
+  reason === "patch-context-ambiguous"
+    ? `Re-read ${path}; the patch context matches multiple locations in the file.`
+    : `Re-read ${path}; the patch context could not be found in the file.`
+
+const previewPatchedContent = (
+  path: string,
+  content: string,
+  hunks: ReadonlyArray<ParsedPatchHunk>
+): PatchPreviewResult => {
+  const newline = detectLineEnding(content)
+  let lines = splitContentLines(content)
+  let nextSearchStart = 0
+  let addedLines = 0
+  let removedLines = 0
+
+  for (const hunk of hunks) {
+    const beforeLines = [
+      ...(hunk.anchor == null ? [] : [hunk.anchor]),
+      ...hunk.lines.flatMap((line) => line.kind === "add" ? [] : [line.content])
+    ]
+    const afterLines = [
+      ...(hunk.anchor == null ? [] : [hunk.anchor]),
+      ...hunk.lines.flatMap((line) => line.kind === "remove" ? [] : [line.content])
+    ]
+
+    if (beforeLines.length === 0) {
+      throw invalidPatch(`Patch hunk for ${path} must include context or removals.`, path)
+    }
+
+    const matchIndex = findUniqueSequenceMatch(lines, beforeLines, nextSearchStart)
+
+    if (matchIndex.kind !== "match") {
+      return {
+        reason: matchIndex.kind === "ambiguous"
+          ? "patch-context-ambiguous"
+          : "patch-context-not-found"
+      }
+    }
+
+    lines = [
+      ...lines.slice(0, matchIndex.index),
+      ...afterLines,
+      ...lines.slice(matchIndex.index + beforeLines.length)
+    ]
+    nextSearchStart = matchIndex.index + afterLines.length
+    addedLines += hunk.lines.filter((line) => line.kind === "add").length
+    removedLines += hunk.lines.filter((line) => line.kind === "remove").length
+  }
+
+  return {
+    content: lines.join(newline),
+    addedLines,
+    removedLines
+  }
+}
 
 export const GlobFilesParameters = {
   pattern: Schema.String,
@@ -657,14 +1197,23 @@ export const ApplyPatchGuidanceSchema = Schema.Struct({
   status: Schema.Literal("guidance"),
   message: Schema.String,
   data: Schema.Struct({
-    reason: Schema.Literal("not-implemented"),
+    reason: Schema.Literal(
+      "missing-read-context",
+      "stale-read-context",
+      "patch-context-not-found",
+      "patch-context-ambiguous",
+      "create-not-allowed",
+      "delete-not-allowed",
+      "not-implemented"
+    ),
     files: Schema.Array(
       Schema.Struct({
         path: Schema.String,
         reason: Schema.Literal(
           "missing-read-context",
           "stale-read-context",
-          "patch-context-mismatch",
+          "patch-context-not-found",
+          "patch-context-ambiguous",
           "create-not-allowed",
           "delete-not-allowed",
           "not-implemented"
@@ -851,12 +1400,14 @@ const makeRepoInspectionHandlers = () => ({
         Effect.map(({ path: workspacePath, content }): ReadFileResult => {
           const normalizedStartLine = sanitizePositiveInt(startLine, 1)
           const normalizedMaxLines = sanitizePositiveInt(maxLines, defaultReadLines)
-          const lines = content.split(/\r?\n/)
+          const lines = splitVisibleContentLines(content)
+          const hasTrailingNewline = content.endsWith("\n")
           const startIndex = normalizedStartLine - 1
           const selectedLines = startIndex >= lines.length
             ? []
             : lines.slice(startIndex, startIndex + normalizedMaxLines)
-          const truncated = startIndex + normalizedMaxLines < lines.length
+          const reachesFileEnd = startIndex + selectedLines.length >= lines.length
+          const truncated = !reachesFileEnd
           const endLine = selectedLines.length === 0
             ? Math.min(lines.length, normalizedStartLine - 1)
             : normalizedStartLine + selectedLines.length - 1
@@ -869,7 +1420,7 @@ const makeRepoInspectionHandlers = () => ({
               startLine: normalizedStartLine,
               endLine,
               totalLines: lines.length,
-              content: selectedLines.join("\n"),
+              content: buildReadFileContent(selectedLines, hasTrailingNewline, reachesFileEnd),
               truncated,
               snapshotId: makeSnapshotId(content),
               encoding: "utf-8"
@@ -883,41 +1434,364 @@ const makeRepoInspectionHandlers = () => ({
     )
 })
 
-const makeMutationStubHandlers = () => ({
-  write_file: ({ path }: WriteFileInput) =>
-    Effect.succeed({
-      status: "guidance" as const,
-      message: "write_file is specified but not implemented yet.",
-      data: {
-        path,
-        reason: "not-implemented" as const,
-        currentSnapshotId: null
-      },
-      hints: makeStubHints()
-    }),
+const makeMutationHandlers = () => ({
+  write_file: ({ path, content, intent, baseSnapshotId, createParents }: WriteFileInput) =>
+    catchFileToolErrors(
+      Effect.gen(function* () {
+        const target = yield* resolveVisibleWorkspaceTarget(path)
+        const existingFile = yield* readOptionalWorkspaceFileSnapshot(target)
 
-  apply_patch: () =>
-    Effect.succeed({
-      status: "guidance" as const,
-      message: "apply_patch is specified but not implemented yet.",
-      data: {
-        reason: "not-implemented" as const,
-        files: []
-      },
-      hints: makeStubHints()
-    }),
+        if (intent === "create") {
+          if (existingFile != null) {
+            return {
+              status: "guidance" as const,
+              message: `${existingFile.path} already exists. Read it and use apply_patch for a focused update instead of write_file create.`,
+              data: {
+                path: existingFile.path,
+                reason: "replace-existing-with-patch" as const,
+                currentSnapshotId: existingFile.snapshotId
+              },
+              hints: [
+                makeReadFileHint(
+                  existingFile.path,
+                  `Read ${existingFile.path} before updating the existing file.`
+                )
+              ]
+            }
+          }
 
-  delete_file: ({ path }: DeleteFileInput) =>
-    Effect.succeed({
-      status: "guidance" as const,
-      message: "delete_file is specified but not implemented yet.",
-      data: {
-        path,
-        reason: "not-implemented" as const,
-        currentSnapshotId: null
-      },
-      hints: makeStubHints()
-    })
+          const createdParents = yield* ensureParentDirectories(target, createParents)
+          yield* writeResolvedWorkspaceTextFile(target, content)
+
+          return {
+            status: "success" as const,
+            message: `Created ${target.workspacePath}.`,
+            data: {
+              path: target.workspacePath,
+              action: "created" as const,
+              bytesWritten: Buffer.byteLength(content),
+              lineCount: countContentLines(content),
+              createdParents,
+              snapshotId: makeSnapshotId(content)
+            },
+            hints: []
+          }
+        }
+
+        if (existingFile == null) {
+          return yield* Effect.fail(
+            new FileNotFoundError({
+              path: target.workspacePath,
+              message: `File not found: ${target.workspacePath}`
+            })
+          )
+        }
+
+        if (baseSnapshotId == null) {
+          return {
+            status: "guidance" as const,
+            message: `Read ${existingFile.path} before replacing it.`,
+            data: {
+              path: existingFile.path,
+              reason: "read-before-replace" as const,
+              currentSnapshotId: existingFile.snapshotId
+            },
+            hints: [
+              makeReadFileHint(
+                existingFile.path,
+                `Read ${existingFile.path} before replacing its full contents.`
+              )
+            ]
+          }
+        }
+
+        if (existingFile.snapshotId !== baseSnapshotId) {
+          return {
+            status: "guidance" as const,
+            message: `${existingFile.path} changed since the last read. Re-read it before replacing the file.`,
+            data: {
+              path: existingFile.path,
+              reason: "stale-snapshot" as const,
+              currentSnapshotId: existingFile.snapshotId
+            },
+            hints: [
+              makeReadFileHint(
+                existingFile.path,
+                `Re-read ${existingFile.path} to capture the latest snapshot before replacing it.`
+              )
+            ]
+          }
+        }
+
+        yield* writeResolvedWorkspaceTextFile(target, content)
+
+        return {
+          status: "success" as const,
+          message: `Replaced ${target.workspacePath}.`,
+          data: {
+            path: target.workspacePath,
+            action: "replaced" as const,
+            bytesWritten: Buffer.byteLength(content),
+            lineCount: countContentLines(content),
+            createdParents: [],
+            snapshotId: makeSnapshotId(content)
+          },
+          hints: []
+        }
+      })
+    ),
+
+  apply_patch: ({ patch, expectedSnapshots }: ApplyPatchInput) =>
+    catchFileToolErrors(
+      Effect.gen(function* () {
+        const operations = yield* Effect.try({
+          try: () => parsePatchText(patch),
+          catch: (cause) =>
+            cause instanceof InvalidPatchError
+              ? cause
+              : invalidPatch(`Unable to parse patch: ${String(cause)}`)
+        })
+
+        const expectedSnapshotMap = new Map<string, SnapshotId>()
+        for (const expectedSnapshot of expectedSnapshots) {
+          const target = yield* resolveVisibleWorkspaceTarget(expectedSnapshot.path)
+
+          if (expectedSnapshotMap.has(target.workspacePath)) {
+            return yield* Effect.fail(
+              invalidPatch(`Duplicate expected snapshot for ${target.workspacePath}.`, target.workspacePath)
+            )
+          }
+
+          expectedSnapshotMap.set(target.workspacePath, expectedSnapshot.snapshotId)
+        }
+
+        const guidanceFiles: Array<ApplyPatchGuidanceFile> = []
+        const guidanceHints: Array<ToolHint> = []
+        const plans = new Map<string, PatchPlan>()
+
+        for (const operation of operations) {
+          const target = yield* resolveVisibleWorkspaceTarget(operation.path)
+
+          if (operation.kind === "add") {
+            guidanceFiles.push({
+              path: target.workspacePath,
+              reason: "create-not-allowed"
+            })
+            guidanceHints.push({
+              code: "write-file-create",
+              message: `Use write_file to create ${target.workspacePath} instead of apply_patch.`,
+              suggestedTool: "write_file",
+              suggestedArgs: {
+                path: target.workspacePath,
+                content: operation.content,
+                intent: "create",
+                baseSnapshotId: null,
+                createParents: false
+              }
+            })
+            continue
+          }
+
+          if (operation.kind === "delete") {
+            guidanceFiles.push({
+              path: target.workspacePath,
+              reason: "delete-not-allowed"
+            })
+            guidanceHints.push(
+              makeReadFileHint(
+                target.workspacePath,
+                `Read ${target.workspacePath} and then use delete_file to remove it.`
+              )
+            )
+            continue
+          }
+
+          const expectedSnapshotId = expectedSnapshotMap.get(target.workspacePath)
+          if (expectedSnapshotId == null) {
+            guidanceFiles.push({
+              path: target.workspacePath,
+              reason: "missing-read-context"
+            })
+            guidanceHints.push(
+              makeReadFileHint(
+                target.workspacePath,
+                `Read ${target.workspacePath} before applying a patch to it.`
+              )
+            )
+            continue
+          }
+
+          const existingPlan = plans.get(target.workspacePath)
+          if (existingPlan != null) {
+            const preview = previewPatchedContent(target.workspacePath, existingPlan.content, operation.hunks)
+
+            if (isPatchPreviewFailure(preview)) {
+              guidanceFiles.push({
+                path: target.workspacePath,
+                reason: preview.reason
+              })
+              guidanceHints.push(
+                makeReadFileHint(
+                  target.workspacePath,
+                  makePatchPreviewReadHintMessage(target.workspacePath, preview.reason)
+                )
+              )
+              continue
+            }
+
+            plans.set(target.workspacePath, {
+              ...existingPlan,
+              content: preview.content,
+              addedLines: existingPlan.addedLines + preview.addedLines,
+              removedLines: existingPlan.removedLines + preview.removedLines
+            })
+            continue
+          }
+
+          const existingFile = yield* readOptionalWorkspaceFileSnapshot(target)
+          if (existingFile == null || existingFile.snapshotId !== expectedSnapshotId) {
+            guidanceFiles.push({
+              path: target.workspacePath,
+              reason: "stale-read-context"
+            })
+            guidanceHints.push(
+              makeReadFileHint(
+                target.workspacePath,
+                `Re-read ${target.workspacePath} before applying the patch; the snapshot is missing or stale.`
+              )
+            )
+            continue
+          }
+
+          const preview = previewPatchedContent(target.workspacePath, existingFile.content, operation.hunks)
+
+          if (isPatchPreviewFailure(preview)) {
+            guidanceFiles.push({
+              path: target.workspacePath,
+              reason: preview.reason
+            })
+            guidanceHints.push(
+              makeReadFileHint(
+                target.workspacePath,
+                makePatchPreviewReadHintMessage(target.workspacePath, preview.reason)
+              )
+            )
+            continue
+          }
+
+          plans.set(target.workspacePath, {
+            target,
+            path: target.workspacePath,
+            content: preview.content,
+            addedLines: preview.addedLines,
+            removedLines: preview.removedLines
+          })
+        }
+
+        if (guidanceFiles.length > 0) {
+          const files = Array.from(
+            new Map(guidanceFiles.map((file) => [`${file.path}:${file.reason}`, file])).values()
+          )
+
+          return {
+            status: "guidance" as const,
+            message: makeApplyPatchGuidanceMessage(files.map((file) => file.reason)),
+            data: {
+              reason: files[0]?.reason ?? "patch-context-not-found",
+              files
+            },
+            hints: dedupeHints(guidanceHints)
+          }
+        }
+
+        for (const plan of plans.values()) {
+          yield* writeResolvedWorkspaceTextFile(plan.target, plan.content)
+        }
+
+        return {
+          status: "success" as const,
+          message: `Updated ${plans.size} file${plans.size === 1 ? "" : "s"}.`,
+          data: {
+            files: Array.from(plans.values(), (plan) => ({
+              path: plan.path,
+              action: "updated" as const,
+              addedLines: plan.addedLines,
+              removedLines: plan.removedLines,
+              snapshotId: makeSnapshotId(plan.content)
+            }))
+          },
+          hints: []
+        }
+      })
+    ),
+
+  delete_file: ({ path, baseSnapshotId }: DeleteFileInput) =>
+    catchFileToolErrors(
+      Effect.gen(function* () {
+        const target = yield* resolveVisibleWorkspaceTarget(path)
+        const existingFile = yield* readOptionalWorkspaceFileSnapshot(target)
+
+        if (existingFile == null) {
+          return {
+            status: "success" as const,
+            message: `${target.workspacePath} is already missing.`,
+            data: {
+              path: target.workspacePath,
+              action: "already-missing" as const
+            },
+            hints: []
+          }
+        }
+
+        if (baseSnapshotId == null) {
+          return {
+            status: "guidance" as const,
+            message: `Read ${existingFile.path} before deleting it.`,
+            data: {
+              path: existingFile.path,
+              reason: "read-before-delete" as const,
+              currentSnapshotId: existingFile.snapshotId
+            },
+            hints: [
+              makeReadFileHint(
+                existingFile.path,
+                `Read ${existingFile.path} before deleting it.`
+              )
+            ]
+          }
+        }
+
+        if (existingFile.snapshotId !== baseSnapshotId) {
+          return {
+            status: "guidance" as const,
+            message: `${existingFile.path} changed since the last read. Re-read it before deleting the file.`,
+            data: {
+              path: existingFile.path,
+              reason: "stale-snapshot" as const,
+              currentSnapshotId: existingFile.snapshotId
+            },
+            hints: [
+              makeReadFileHint(
+                existingFile.path,
+                `Re-read ${existingFile.path} to capture the latest snapshot before deleting it.`
+              )
+            ]
+          }
+        }
+
+        yield* deleteResolvedWorkspaceFile(target)
+
+        return {
+          status: "success" as const,
+          message: `Deleted ${target.workspacePath}.`,
+          data: {
+            path: target.workspacePath,
+            action: "deleted" as const
+          },
+          hints: []
+        }
+      })
+    )
 })
 
 export const makeRepoInspectionToolkitLayer = () =>
@@ -927,13 +1801,13 @@ export const makeRepoInspectionToolkitLayer = () =>
 
 export const makeFileMutationToolkitLayer = () =>
   FileMutationToolkit.toLayer(
-    FileMutationToolkit.of(makeMutationStubHandlers())
+    FileMutationToolkit.of(makeMutationHandlers())
   )
 
 export const makeFileToolkitLayer = () =>
   FileToolkit.toLayer(
     FileToolkit.of({
       ...makeRepoInspectionHandlers(),
-      ...makeMutationStubHandlers()
+      ...makeMutationHandlers()
     })
   )
