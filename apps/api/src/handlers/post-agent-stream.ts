@@ -1,6 +1,6 @@
 import { Agent, layerConfig } from "@malkier/agent"
 import { Tracer as OtelTracer } from "@effect/opentelemetry"
-import { Config, Effect, Fiber, Layer, Option, Stream } from "effect"
+import { Cause, Config, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { Response as EffectResponse } from "@effect/ai"
 import type { SpanContext } from "@opentelemetry/api"
 import { PostAgentMessageRequest } from "../schema"
@@ -14,6 +14,8 @@ import { HoneycombObservabilityLive } from "../observability/honeycomb"
 import withHttpObservability from "../server/http-observability"
 
 const encoder = new TextEncoder()
+const requestStreamTimeoutDuration = '5 minutes'
+const requestStreamTimeoutMessage = `Request stream timeout after ${requestStreamTimeoutDuration}`
 
 const agentLayer = layerConfig({
   model: Config.string("MALKIER_AGENT_MODEL").pipe(
@@ -34,8 +36,44 @@ const agentSystemPrompt = [
   "You are Malkier, an assistant that can use tools.",
   "When a user's request can be advanced with an available tool, call the tool instead of only describing what you would do.",
   "If the user asks you to test, inspect, or use tools, make at least one relevant tool call before your final answer unless the request is impossible or unsafe.",
-  "Do not ask for confirmation before making a safe, relevant tool call."
+  "Do not ask for confirmation before making a safe, relevant tool call.",
+  "Work efficiently: prefer targeted tool calls, avoid repeating the same exploration without a clear reason, and stop once you have enough evidence to answer.",
+  "For longer requests, synthesize what you have learned as you go and explicitly wrap up with findings, remaining uncertainty, and the best next step when further tool use is unnecessary."
 ].join(" ")
+
+type StreamStopReason =
+  | 'done'
+  | 'agent-event-error'
+  | 'stream-timeout'
+  | 'stream-failure'
+  | 'client-cancel'
+  | 'server-interrupt'
+
+const getInterruptedStreamStopReason = (cancelledByClient: boolean): Exclude<StreamStopReason, 'done'> =>
+  cancelledByClient ? 'client-cancel' : 'server-interrupt'
+
+const getStreamStopReasonFromCause = (
+  cause: Cause.Cause<unknown>,
+  cancelledByClient: boolean
+): Exclude<StreamStopReason, 'done'> =>
+  Cause.isInterruptedOnly(cause)
+    ? getInterruptedStreamStopReason(cancelledByClient)
+    : 'stream-failure'
+
+const getStreamStopMessage = (reason: Exclude<StreamStopReason, 'done'>, cause?: Cause.Cause<unknown>) => {
+  switch (reason) {
+    case 'agent-event-error':
+      return streamFailureMessage
+    case 'client-cancel':
+      return 'Stream cancelled by client'
+    case 'server-interrupt':
+      return 'Stream interrupted on server'
+    case 'stream-timeout':
+      return requestStreamTimeoutMessage
+    case 'stream-failure':
+      return cause?.toString() ?? streamFailureMessage
+  }
+}
 
 const formatResult = (result: unknown): string => {
   try {
@@ -74,11 +112,76 @@ const makeStreamResponse = ({
 }) => {
   let fiber: Fiber.RuntimeFiber<void, never> | null = null
   let sequence = nextSequence
+  let agentText = ''
+  let cancelledByClient = false
+  let streamClosed = false
+
+  const assistantOutputMetadata = (reason: Exclude<StreamStopReason, 'done'>) => ({
+    kind: 'assistant-output' as const,
+    state: 'partial' as const,
+    reason
+  })
+
+  const streamErrorMetadata = (reason: Exclude<StreamStopReason, 'done'>) => ({
+    kind: 'stream-error' as const,
+    reason
+  })
+
+  const persistAssistantText = ({
+    reason
+  }: {
+    reason: StreamStopReason
+  }) =>
+    agentText.length === 0
+      ? Effect.succeed(false)
+      : sessionService.insertSessionMessage({
+        sessionId,
+        message: agentText,
+        role: 'assistant',
+        status: 'complete',
+        nextSequence: sequence++,
+        metadata: reason === 'done' ? undefined : assistantOutputMetadata(reason)
+      }).pipe(
+        Effect.as(true)
+      )
+
+  const persistStreamError = (reason: Exclude<StreamStopReason, 'done'>, message: string) =>
+    sessionService.insertSessionMessage({
+      sessionId,
+      message,
+      role: 'assistant',
+      status: 'error',
+      nextSequence: sequence++,
+      metadata: streamErrorMetadata(reason)
+    })
+
+  const annotateStreamOutcome = ({
+    reason,
+    partialTextPersisted
+  }: {
+    reason: StreamStopReason
+    partialTextPersisted: boolean
+  }) =>
+    annotateCurrentSpanAttributes({
+      'stream.stop_reason': reason,
+      'stream.cancelled_by_client': cancelledByClient,
+      'stream.partial_text_persisted': partialTextPersisted,
+      'stream.partial_text_length': agentText.length,
+      'stream.sequence_end': sequence - 1
+    })
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (event: string, data: unknown) => {
-        controller.enqueue(sseFrame(event, data))
+        if (streamClosed) {
+          return
+        }
+
+        try {
+          controller.enqueue(sseFrame(event, data))
+        } catch {
+          streamClosed = true
+        }
       }
 
       send('heartbeat', { ok: true })
@@ -92,7 +195,6 @@ const makeStreamResponse = ({
         })
 
         const agent = yield* Agent
-        let agentText = '';
         const toolkit = yield* getAgentTools(userId, sessionService)
         const toolNames = Object.values(toolkit.tools).map((tool) => tool.name)
 
@@ -165,34 +267,40 @@ const makeStreamResponse = ({
             }
 
             if (event.type === 'done') {
-              return sessionService.insertSessionMessage({
-                sessionId,
-                message: agentText,
-                role: 'assistant',
-                status: 'complete',
-                nextSequence: sequence++
-              }).pipe(
+              return persistAssistantText({ reason: 'done' }).pipe(
+                Effect.tap((partialTextPersisted) =>
+                  annotateStreamOutcome({
+                    reason: 'done',
+                    partialTextPersisted
+                  })
+                ),
                 Effect.zipRight(Effect.sync(() => send('agent-event', event)))
               )
             }
 
             if (event.type === 'error') {
+              const message = event.message.length > 0
+                ? event.message
+                : getStreamStopMessage('agent-event-error')
+
               return withEventSpan(
                 'agent.error',
                 {
                   "session.id": sessionId,
                   "user.id": userId,
                   "error.type": 'agent-event',
-                  "error.message": event.message
+                  "error.message": message
                 },
-                sessionService.insertSessionMessage({
-                  sessionId,
-                  message: event.message,
-                  role: 'assistant',
-                  status: 'error',
-                  nextSequence: sequence++
-                }).pipe(
-                  Effect.zipRight(Effect.sync(() => send('agent-event', event)))
+                persistAssistantText({ reason: 'agent-event-error' }).pipe(
+                  Effect.flatMap((partialTextPersisted) =>
+                    annotateStreamOutcome({
+                      reason: 'agent-event-error',
+                      partialTextPersisted
+                    }).pipe(
+                      Effect.zipRight(persistStreamError('agent-event-error', message))
+                    )
+                  ),
+                  Effect.zipRight(Effect.sync(() => send('agent-event', { ...event, message })))
                 )
               )
             }
@@ -209,56 +317,73 @@ const makeStreamResponse = ({
       fiber = Effect.runFork(
         streamEffect.pipe(
           Effect.timeoutFail({
-            duration: '20 seconds',
-            onTimeout: () => new StreamTimeoutError({ message: 'Request stream timeout after 20 seconds' })
+            duration: requestStreamTimeoutDuration,
+            onTimeout: () => new StreamTimeoutError({ message: requestStreamTimeoutMessage })
           }),
           Effect.withSpan('request.stream'),
           Effect.provide(Layer.mergeAll(agentLayer, HoneycombObservabilityLive)),
           Effect.catchTags({
             StreamTimeoutError: (cause) =>
-              annotateCurrentSpanAttributes({
-                "error.type": 'stream-timeout',
-                "error.message": cause.message
-              }).pipe(
-                Effect.zipRight(Effect.sync(() => send('agent-event', { type: 'error', message: cause.message })))
-              )
-          }),
-          // TODO: Add catch tags to handle timeout errors. Letting catchAllCause so i can see stacks in browser
-          Effect.catchAllCause((cause) =>
-            annotateCurrentSpanAttributes({
-              "error.type": 'stream-failure',
-              "error.message": cause.toString()
-            }).pipe(
-              Effect.zipRight(
-                sessionService.insertSessionMessage({
-                  sessionId,
-                  message: cause.toString(),
-                  role: 'assistant',
-                  status: 'error',
-                  nextSequence: sequence++
-                }).pipe(
-                  Effect.catchAll(() => Effect.void),
-                  Effect.zipRight(
-                    Effect.sync(() => {
-                      send("agent-event", {
-                        type: "error",
-                        message: cause.toString()
+              persistAssistantText({ reason: 'stream-timeout' }).pipe(
+                Effect.flatMap((partialTextPersisted) =>
+                  annotateCurrentSpanAttributes({
+                    'error.type': 'stream-timeout',
+                    'error.message': cause.message
+                  }).pipe(
+                    Effect.zipRight(
+                      annotateStreamOutcome({
+                        reason: 'stream-timeout',
+                        partialTextPersisted
                       })
-                    })
+                    ),
+                    Effect.zipRight(persistStreamError('stream-timeout', cause.message)),
+                    Effect.zipRight(Effect.sync(() => send('agent-event', { type: 'error', message: cause.message })))
                   )
                 )
               )
-            )
+          }),
+          Effect.catchAllCause((cause) =>
+            Effect.gen(function* () {
+              const reason = getStreamStopReasonFromCause(cause, cancelledByClient)
+              const message = getStreamStopMessage(reason, cause)
+              const partialTextPersisted = yield* persistAssistantText({ reason }).pipe(
+                Effect.catchAll(() => Effect.succeed(false))
+              )
+
+              yield* annotateCurrentSpanAttributes({
+                'error.type': reason,
+                'error.message': message,
+                'stream.interrupted': Cause.isInterrupted(cause)
+              })
+              yield* annotateStreamOutcome({ reason, partialTextPersisted })
+
+              yield* persistStreamError(reason, message).pipe(
+                Effect.catchAll(() => Effect.void)
+              )
+
+              if (reason !== 'client-cancel') {
+                yield* Effect.sync(() => {
+                  send('agent-event', {
+                    type: 'error',
+                    message
+                  })
+                })
+              }
+            })
           ),
           Effect.ensuring(
             Effect.sync(() => {
-              controller.close()
+              if (!streamClosed) {
+                streamClosed = true
+                controller.close()
+              }
             })
           )
         )
       )
     },
     cancel() {
+      cancelledByClient = true
       if (fiber !== null) {
         Effect.runFork(Fiber.interrupt(fiber))
       }

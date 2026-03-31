@@ -13,10 +13,29 @@ export type PersistedToolResult = {
   isFailure: boolean
 }
 
+export type PersistedAssistantOutput = {
+  kind: 'assistant-output'
+  state: 'partial'
+  reason: PersistedStreamStopReason
+}
+
+export type PersistedStreamError = {
+  kind: 'stream-error'
+  reason: PersistedStreamStopReason
+}
+
+export type PersistedStreamStopReason =
+  | 'agent-event-error'
+  | 'stream-timeout'
+  | 'stream-failure'
+  | 'client-cancel'
+  | 'server-interrupt'
+
 export type PersistedPromptMetadata =
   | PersistedAssistantToolCall
   | PersistedToolResult
-
+  | PersistedAssistantOutput
+  | PersistedStreamError
 
 export const isToolCallMetadata = (metadata: unknown): metadata is PersistedAssistantToolCall => {
   return (

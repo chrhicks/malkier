@@ -16,9 +16,30 @@ export const ToolCallResult = Schema.Struct({
   isFailure: Schema.Boolean
 })
 
+export const StreamStopReason = Schema.Literal(
+  'agent-event-error',
+  'stream-timeout',
+  'stream-failure',
+  'client-cancel',
+  'server-interrupt'
+)
+
+export const AssistantOutput = Schema.Struct({
+  kind: Schema.Literal('assistant-output'),
+  state: Schema.Literal('partial'),
+  reason: StreamStopReason
+})
+
+export const StreamError = Schema.Struct({
+  kind: Schema.Literal('stream-error'),
+  reason: StreamStopReason
+})
+
 export const PromptMetadata = Schema.Union(
   ToolCall,
-  ToolCallResult
+  ToolCallResult,
+  AssistantOutput,
+  StreamError
 )
 
 export type PromptMetadata = Schema.Schema.Type<typeof PromptMetadata>

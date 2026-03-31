@@ -162,6 +162,44 @@ describe("collectPrompt", () => {
     ])
   })
 
+  test("keeps partial assistant output metadata as plain assistant text", () => {
+    const messages: SessionMessageWithMetadata[] = [
+      makeSessionMessage({
+        role: "assistant",
+        content: "Here is the partial summary so far.",
+        sequence: 1,
+        metadata: {
+          kind: "assistant-output",
+          state: "partial",
+          reason: "client-cancel"
+        }
+      }),
+      makeSessionMessage({
+        role: "assistant",
+        content: "Stream cancelled by client",
+        sequence: 2,
+        status: "error",
+        metadata: {
+          kind: "stream-error",
+          reason: "client-cancel"
+        }
+      })
+    ]
+
+    const actual = Prompt.make(collectPrompt(messages))
+
+    expect(normalizePrompt(actual)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the partial summary so far." }]
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Stream cancelled by client" }]
+      }
+    ])
+  })
+
   test("createPrompt prepends the tool-use system instructions", () => {
     const actual = Prompt.make(createPrompt([
       makeSessionMessage({
@@ -175,7 +213,7 @@ describe("collectPrompt", () => {
 
     expect(normalized[0]).toEqual({
       role: "system",
-      content: "You are Malkier, an assistant that can use tools. When a user's request can be advanced with an available tool, call the tool instead of only describing what you would do. If the user asks you to test, inspect, or use tools, make at least one relevant tool call before your final answer unless the request is impossible or unsafe. Do not ask for confirmation before making a safe, relevant tool call."
+      content: "You are Malkier, an assistant that can use tools. When a user's request can be advanced with an available tool, call the tool instead of only describing what you would do. If the user asks you to test, inspect, or use tools, make at least one relevant tool call before your final answer unless the request is impossible or unsafe. Do not ask for confirmation before making a safe, relevant tool call. Work efficiently: prefer targeted tool calls, avoid repeating the same exploration without a clear reason, and stop once you have enough evidence to answer. For longer requests, synthesize what you have learned as you go and explicitly wrap up with findings, remaining uncertainty, and the best next step when further tool use is unnecessary."
     })
     expect(normalized[1]).toEqual({
       role: "user",

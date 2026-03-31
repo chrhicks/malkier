@@ -61,4 +61,50 @@ describe("decodeToolMetadata", () => {
     expect(result.left._tag).toBe("MetadataShapeError")
     expect(result.left.message).toBe("Persisted metadata does not match PromptMetadata schema")
   })
+
+  test("decodes persisted assistant-output metadata", async () => {
+    const result = await Effect.runPromise(
+      Effect.either(
+        decodeToolMetadata(
+          JSON.stringify({
+            kind: "assistant-output",
+            state: "partial",
+            reason: "client-cancel"
+          })
+        )
+      )
+    )
+
+    if (result._tag !== "Right") {
+      throw new Error(`Expected Right, got ${result._tag}`)
+    }
+
+    expect(result.right).toEqual({
+      kind: "assistant-output",
+      state: "partial",
+      reason: "client-cancel"
+    })
+  })
+
+  test("decodes persisted stream-error metadata", async () => {
+    const result = await Effect.runPromise(
+      Effect.either(
+        decodeToolMetadata(
+          JSON.stringify({
+            kind: "stream-error",
+            reason: "stream-timeout"
+          })
+        )
+      )
+    )
+
+    if (result._tag !== "Right") {
+      throw new Error(`Expected Right, got ${result._tag}`)
+    }
+
+    expect(result.right).toEqual({
+      kind: "stream-error",
+      reason: "stream-timeout"
+    })
+  })
 })
