@@ -6,6 +6,12 @@ import type { AgentMaxTurnsExceededError, StreamTimeoutError, TurnTimeoutError }
 export interface AgentInput<Tools extends Record<string, Tool.Any> = {}> {
   readonly prompt: Prompt.RawInput
   readonly toolkit?: Toolkit.WithHandler<Tools>
+  readonly toolChoice?: "auto" | "none" | "required" | {
+    readonly tool: string
+  } | {
+    readonly mode?: "auto" | "required"
+    readonly oneOf: ReadonlyArray<string>
+  }
 }
 
 export type AgentEvent =

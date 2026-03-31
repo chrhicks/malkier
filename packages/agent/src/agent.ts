@@ -7,7 +7,15 @@ import type * as Tool from '@effect/ai/Tool'
 import type * as Response from "@effect/ai/Response";
 import { AgentMaxTurnsExceededError, StreamTimeoutError, TurnTimeoutError } from "./errors";
 
-const maxTurns = 5
+const maxModelRounds = 30
+const softMaxModelRounds = 28
+
+const softStopSystemMessage = [
+  "You are approaching the maximum number of model rounds for this request.",
+  "Do not call any more tools.",
+  "Provide the best possible final response using only the information already gathered.",
+  "If work remains, clearly summarize what you completed, what remains uncertain, and the best next step."
+].join(" ")
 
 type SpanAttributeValue = string | number | boolean | undefined
 
@@ -24,6 +32,16 @@ const annotateCurrentSpanAttributes = (attributes: Record<string, SpanAttributeV
         ? Effect.void
         : Effect.annotateCurrentSpan(key, value),
     { discard: true }
+  )
+
+const appendSoftStopInstruction = (prompt: Prompt.Prompt) =>
+  Prompt.merge(
+    prompt,
+    Prompt.fromMessages([
+      Prompt.makeMessage("system", {
+        content: softStopSystemMessage
+      })
+    ])
   )
 
 export class Agent extends Context.Tag("@malkier/agent/Agent")<Agent, Agent.Service>() { }
@@ -117,7 +135,7 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
       prompt,
       toolkit: input.toolkit
     }).pipe(
-      Stream.timeoutFail(() => new StreamTimeoutError({ message: `Turn ${turn} produced no chunks in time` }), '20 seconds'),
+      Stream.timeoutFail(() => new StreamTimeoutError({ message: `Turn ${turn} produced no chunks in time` }), '60 seconds'),
       Stream.runForEach((part) =>
         Effect.gen(function* () {
           if (!sawFirstPart) {
@@ -168,7 +186,7 @@ const runTurn = <Tools extends Record<string, Tool.Any>>(
   }).pipe(
     Effect.withSpan('agent.run-turn'),
     Effect.timeoutFail({
-      duration: '60 seconds',
+      duration: '120 seconds',
       onTimeout: () => new TurnTimeoutError({ message: `Turn ${turn} timed out` })
     })
   )
@@ -189,17 +207,34 @@ export const makeWithLanguageModelLayer = (
             const producer = Effect.gen(function* () {
               let prompt = Prompt.make(input.prompt)
               let turn = 0
+              let usedSoftStopRound = false
               while (true) {
-                if (turn > 5) {
+                if (turn >= maxModelRounds) {
                   yield* Effect.fail(
                     new AgentMaxTurnsExceededError({
-                      maxTurns,
-                      message: `Agent exceeded maximum turns (${maxTurns})`
+                      maxTurns: maxModelRounds,
+                      message: `Agent exceeded maximum model rounds (${maxModelRounds})`
                     })
                   )
                 }
 
-                const nextPrompt = yield* runTurn(mailbox, input, prompt, ++turn, metadata)
+                const shouldUseSoftStopRound = !usedSoftStopRound && turn >= softMaxModelRounds
+                const roundInput = shouldUseSoftStopRound
+                  ? {
+                    ...input,
+                    toolkit: undefined,
+                    toolChoice: "none" as const
+                  }
+                  : input
+                const roundPrompt = shouldUseSoftStopRound
+                  ? appendSoftStopInstruction(prompt)
+                  : prompt
+
+                if (shouldUseSoftStopRound) {
+                  usedSoftStopRound = true
+                }
+
+                const nextPrompt = yield* runTurn(mailbox, roundInput, roundPrompt, ++turn, metadata)
 
                 if (Option.isNone(nextPrompt)) {
                   yield* mailbox.offer({ type: 'done' })
