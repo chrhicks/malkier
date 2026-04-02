@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show, onMount } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show, onCleanup, onMount } from "solid-js";
 import { streamAgent, type AgentEvent } from "./lib/agentStream";
 import {
   getSession,
@@ -99,7 +99,9 @@ const createAssistantStreamController = (options: {
 
 export function App() {
   let prompt!: HTMLInputElement;
+  let chatLog!: HTMLDivElement;
   let sessionLoadVersion = 0;
+  let scrollFrame = 0;
 
   const userId = getStoredUserId();
   const [sessions, setSessions] = createSignal<SessionSummary[]>([]);
@@ -111,8 +113,22 @@ export function App() {
   const [loadingConversation, setLoadingConversation] = createSignal(false);
   const [statusLine, setStatusLine] = createSignal("Loading persisted sessions...");
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  const [shouldAutoScroll, setShouldAutoScroll] = createSignal(true);
 
   const activeSession = createMemo(() => sessions().find((session) => session.id === activeSessionId()) ?? null);
+
+  const isNearBottom = (element: HTMLElement) => element.scrollHeight - element.scrollTop - element.clientHeight < 72;
+
+  const scrollTranscriptToBottom = () => {
+    if (!chatLog) {
+      return;
+    }
+
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = requestAnimationFrame(() => {
+      chatLog.scrollTo({ top: chatLog.scrollHeight });
+    });
+  };
 
   const rememberActiveSession = (sessionId: string | null) => {
     setActiveSessionId(sessionId);
@@ -136,6 +152,7 @@ export function App() {
     sessionLoadVersion += 1;
     rememberActiveSession(null);
     resetConversationState();
+    setShouldAutoScroll(true);
     setStatusLine(nextStatusLine);
 
     if (focusComposer) {
@@ -154,6 +171,7 @@ export function App() {
 
     rememberActiveSession(sessionId);
     setLoadingConversation(true);
+    setShouldAutoScroll(true);
     resetConversationState();
     setStatusLine("Loading selected session...");
 
@@ -214,6 +232,22 @@ export function App() {
     })();
   });
 
+  onCleanup(() => {
+    cancelAnimationFrame(scrollFrame);
+  });
+
+  createEffect(() => {
+    bubbles();
+    activeBubble();
+    loadingConversation();
+
+    if (!shouldAutoScroll()) {
+      return;
+    }
+
+    scrollTranscriptToBottom();
+  });
+
   const submitPrompt = async (event: SubmitEvent) => {
     event.preventDefault();
     if (!prompt || pending()) return;
@@ -228,6 +262,7 @@ export function App() {
     });
 
     setErrorMessage(null);
+    setShouldAutoScroll(true);
     appendBubble(textBubble("user", text, "complete"));
     streamController.start();
     setPending(true);
@@ -313,7 +348,13 @@ export function App() {
             </span>
           </div>
 
-          <div class="chat-log">
+          <div
+            ref={chatLog}
+            class="chat-log"
+            onScroll={() => {
+              setShouldAutoScroll(isNearBottom(chatLog));
+            }}
+          >
             <Show
               when={!loadingConversation() || bubbles().length > 0 || activeBubble() !== null}
               fallback={<p class="empty-state">Loading the selected session...</p>}
@@ -350,9 +391,12 @@ export function App() {
           <section class="panel session-panel" aria-labelledby="sessions-heading">
             <div class="panel-title panel-title-row">
               <h2 id="sessions-heading" class="panel-heading">Sessions</h2>
-              <button type="button" class="ghost-button" onClick={() => startNewSession()} disabled={pending()}>
-                New session
-              </button>
+              <div class="panel-actions">
+                <span class="panel-note">{sessions().length} saved</span>
+                <button type="button" class="ghost-button" onClick={() => startNewSession()} disabled={pending()}>
+                  New session
+                </button>
+              </div>
             </div>
 
             <div class="session-list">
