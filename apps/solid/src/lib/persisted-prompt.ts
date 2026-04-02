@@ -48,8 +48,6 @@ export const isToolCallMetadata = (metadata: unknown): metadata is PersistedAssi
     && 'params' in metadata
     && typeof metadata.id === 'string'
     && typeof metadata.name === 'string'
-    && typeof metadata.params === 'object'
-    && metadata.params != null
   )
 }
 
@@ -65,8 +63,25 @@ export const isToolResultMetadata = (metadata: unknown): metadata is PersistedTo
     && 'isFailure' in metadata
     && typeof metadata.id === 'string'
     && typeof metadata.name === 'string'
-    && typeof metadata.result === 'object'
     && typeof metadata.isFailure === 'boolean'
-    && metadata.result != null
+  )
+}
+
+const isStreamStopReason = (value: unknown): value is PersistedStreamStopReason => {
+  return value === 'agent-event-error'
+    || value === 'stream-timeout'
+    || value === 'stream-failure'
+    || value === 'client-cancel'
+    || value === 'server-interrupt'
+}
+
+export const isStreamErrorMetadata = (metadata: unknown): metadata is PersistedStreamError => {
+  return (
+    metadata != null
+    && typeof metadata === 'object'
+    && 'kind' in metadata
+    && metadata.kind === 'stream-error'
+    && 'reason' in metadata
+    && isStreamStopReason(metadata.reason)
   )
 }

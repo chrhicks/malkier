@@ -1,15 +1,14 @@
 import { createMemo, createSignal, For, Show, onMount } from "solid-js";
-import { streamAgent } from "./lib/agentStream";
+import { streamAgent, type AgentEvent } from "./lib/agentStream";
 import {
   getSession,
   getStoredActiveSessionId,
   getStoredUserId,
   listSessions,
   setStoredActiveSessionId,
-  type SessionMessage,
   type SessionSummary,
 } from "./lib/sessions";
-import { formatMetadata, formatToolContent } from "./lib/format.util";
+import { bubbleFromAgentEvent, bubblesFromSessionMessages, errorBubble, textBubble } from "./lib/format.util";
 import type { Bubble } from "./types";
 import { MessageBubble } from "./components/MessageBubble";
 
@@ -30,21 +29,73 @@ const formatSessionTitle = (session: SessionSummary | null) => session?.title?.t
 const formatSessionTimestamp = (value: string) => sessionTimestampFormatter.format(new Date(value));
 
 
-const fromSessionMessage = (message: SessionMessage): Bubble => {
-  const formatted = formatMetadata(message.metadata)
-
-  return ({
-    role: message.role,
-    content: message.status === "error" ? `Error: ${message.content}` : formatted ?? message.content,
-    status: message.status,
-  })
-}
-
 const sortSessions = (items: SessionSummary[]) =>
   [...items].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
 
 const upsertSession = (items: SessionSummary[], nextSession: SessionSummary) =>
   sortSessions([nextSession, ...items.filter((session) => session.id !== nextSession.id)]);
+
+const resolveSessionToHydrate = (items: SessionSummary[], preferredSessionId: string | null) =>
+  preferredSessionId !== null && items.some((session) => session.id === preferredSessionId)
+    ? preferredSessionId
+    : items[0]?.id ?? null;
+
+const createAssistantStreamController = (options: {
+  appendBubble: (bubble: Bubble) => void;
+  setActiveBubble: (bubble: Bubble | null) => void;
+}) => {
+  let assistantText = "";
+  let streamErrorMessage: string | null = null;
+
+  const flushText = () => {
+    if (assistantText.trim().length > 0) {
+      options.appendBubble(textBubble("assistant", assistantText, "complete"));
+      assistantText = "";
+    }
+
+    options.setActiveBubble(null);
+  };
+
+  return {
+    start() {
+      assistantText = "";
+      streamErrorMessage = null;
+      options.setActiveBubble(textBubble("assistant", "", "streaming"));
+    },
+    handleEvent(event: AgentEvent) {
+      if (event.type === "text-delta") {
+        assistantText += event.delta;
+        options.setActiveBubble(textBubble("assistant", assistantText, "streaming"));
+        return;
+      }
+
+      if (event.type === "tool-call" || event.type === "tool-result") {
+        flushText();
+        const bubble = bubbleFromAgentEvent(event);
+        if (bubble !== null) {
+          options.appendBubble(bubble);
+        }
+        return;
+      }
+
+      if (event.type === "error") {
+        flushText();
+        streamErrorMessage = event.message;
+      }
+    },
+    finish() {
+      flushText();
+      const detail = streamErrorMessage;
+      streamErrorMessage = null;
+      return detail;
+    },
+    clear() {
+      assistantText = "";
+      streamErrorMessage = null;
+      options.setActiveBubble(null);
+    },
+  };
+};
 
 export function App() {
   let prompt!: HTMLInputElement;
@@ -68,13 +119,24 @@ export function App() {
     setStoredActiveSessionId(sessionId);
   };
 
-  const startNewSession = (focusComposer = true) => {
-    sessionLoadVersion += 1;
-    rememberActiveSession(null);
+  const resetConversationState = () => {
     setBubbles([]);
     setActiveBubble(null);
     setErrorMessage(null);
-    setStatusLine("New session ready. Send a prompt to create it.");
+  };
+
+  const appendBubble = (bubble: Bubble) => {
+    setBubbles((previous) => [...previous, bubble]);
+  };
+
+  const startNewSession = (
+    focusComposer = true,
+    nextStatusLine = "New session ready. Send a prompt to create it.",
+  ) => {
+    sessionLoadVersion += 1;
+    rememberActiveSession(null);
+    resetConversationState();
+    setStatusLine(nextStatusLine);
 
     if (focusComposer) {
       prompt?.focus();
@@ -92,9 +154,7 @@ export function App() {
 
     rememberActiveSession(sessionId);
     setLoadingConversation(true);
-    setActiveBubble(null);
-    setBubbles([]);
-    setErrorMessage(null);
+    resetConversationState();
     setStatusLine("Loading selected session...");
 
     try {
@@ -105,7 +165,7 @@ export function App() {
       }
 
       setSessions((previous) => upsertSession(previous, detail.session));
-      setBubbles(detail.messages.map(fromSessionMessage));
+      setBubbles(bubblesFromSessionMessages(detail.messages));
       setStatusLine(`Loaded ${formatSessionTitle(detail.session)}.`);
     } catch (error) {
       console.error(error)
@@ -123,24 +183,27 @@ export function App() {
     }
   };
 
+  const refreshAndHydrateSession = async (
+    preferredSessionId: string | null,
+    emptyStatusLine = "New session ready. Send a prompt to create it.",
+  ) => {
+    const nextSessions = await refreshSessions();
+    const sessionToHydrate = resolveSessionToHydrate(nextSessions, preferredSessionId);
+
+    if (sessionToHydrate !== null) {
+      await loadSession(sessionToHydrate);
+      return;
+    }
+
+    startNewSession(false, emptyStatusLine);
+  };
+
   onMount(() => {
     void (async () => {
       setLoadingSessions(true);
 
       try {
-        const nextSessions = await refreshSessions();
-        const storedSessionId = activeSessionId();
-        const initialSessionId =
-          storedSessionId !== null && nextSessions.some((session) => session.id === storedSessionId)
-            ? storedSessionId
-            : nextSessions[0]?.id ?? null;
-
-        if (initialSessionId !== null) {
-          await loadSession(initialSessionId);
-        } else {
-          startNewSession(false);
-          setStatusLine("No saved sessions yet. Send a prompt to create one.");
-        }
+        await refreshAndHydrateSession(activeSessionId(), "No saved sessions yet. Send a prompt to create one.");
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         setErrorMessage(message);
@@ -159,28 +222,17 @@ export function App() {
     if (!text) return;
 
     let resolvedSessionId = activeSessionId();
-    let assistantText = "";
-    let streamErrorMessage: string | null = null;
+    const streamController = createAssistantStreamController({
+      appendBubble,
+      setActiveBubble,
+    });
 
     setErrorMessage(null);
-    setBubbles((previous) => [...previous, { role: "user", content: text, status: "complete" }]);
-    setActiveBubble({ role: "assistant", content: "", status: "streaming" });
+    appendBubble(textBubble("user", text, "complete"));
+    streamController.start();
     setPending(true);
     setStatusLine(resolvedSessionId === null ? "Creating a new session..." : "Streaming response...");
     prompt.value = "";
-
-    const commitAssistantText = () => {
-      if (assistantText.trim().length > 0) {
-        setBubbles((previous) => [
-          ...previous,
-          {
-            role: 'assistant', content: assistantText, status: 'complete'
-          }
-        ])
-        assistantText = ''
-      }
-      setActiveBubble(null)
-    }
 
     try {
       const abortController = new AbortController();
@@ -207,47 +259,15 @@ export function App() {
           setStatusLine("Session established. Streaming response...");
         },
         onEvent: (streamEvent) => {
-          if (streamEvent.type === "text-delta") {
-            assistantText += streamEvent.delta;
-            setActiveBubble({ role: "assistant", content: assistantText, status: "streaming" });
-            return;
-          }
-
-          if (streamEvent.type === 'tool-call') {
-            commitAssistantText()
-            setBubbles((previous) => [...previous, {
-              role: 'assistant',
-              content: formatToolContent(streamEvent),
-              status: 'complete'
-            }])
-            return
-          }
-
-          if (streamEvent.type === 'tool-result') {
-            commitAssistantText()
-            setBubbles((previous) => [...previous, {
-              role: 'tool',
-              content: formatToolContent(streamEvent),
-              status: 'complete'
-            }])
-            return
-          }
-
-          if (streamEvent.type === "error") {
-            commitAssistantText()
-            streamErrorMessage = streamEvent.message;
-          }
+          streamController.handleEvent(streamEvent);
         },
         signal: abortController.signal,
       });
 
-      commitAssistantText()
+      const streamErrorMessage = streamController.finish();
 
       if (streamErrorMessage !== null) {
-        setBubbles((previous) => [
-          ...previous,
-          { role: "assistant", content: `Error: ${streamErrorMessage}`, status: "error" },
-        ]);
+        appendBubble(errorBubble("assistant", streamErrorMessage));
         setErrorMessage(streamErrorMessage);
         setStatusLine("Stream finished with an error.");
       } else {
@@ -255,29 +275,16 @@ export function App() {
       }
 
       try {
-        const nextSessions = await refreshSessions();
-        const sessionToHydrate =
-          resolvedSessionId !== null && nextSessions.some((session) => session.id === resolvedSessionId)
-            ? resolvedSessionId
-            : nextSessions[0]?.id ?? null;
-
-        if (sessionToHydrate !== null) {
-          await loadSession(sessionToHydrate);
-        } else {
-          startNewSession(false);
-        }
+        await refreshAndHydrateSession(resolvedSessionId);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         setErrorMessage(message);
         setStatusLine("The stream finished, but refreshing saved sessions failed.");
       }
     } catch (error) {
+      streamController.clear();
       const message = error instanceof Error ? error.message : "Unknown error";
-      setBubbles((previous) => [
-        ...previous,
-        { role: "assistant", content: `Error: ${message}`, status: "error" },
-      ]);
-      setActiveBubble(null);
+      appendBubble(errorBubble("assistant", message));
       setErrorMessage(message);
       setStatusLine("Request failed before the stream could finish.");
     } finally {
@@ -290,17 +297,17 @@ export function App() {
       <div class="ambient" aria-hidden="true" />
 
       <header class="topbar">
-        <div class="brand">
+        <h1 class="brand">
           <span class="status-dot" />
           Malkier Command Deck
-        </div>
+        </h1>
         <div class="meta">sqlite-backed sessions | solid chat console</div>
       </header>
 
       <main class="layout">
-        <section class="panel chat-panel">
+        <section class="panel chat-panel" aria-busy={loadingConversation() || pending()} aria-labelledby="conversation-heading">
           <div class="panel-title panel-title-row">
-            <span>{formatSessionTitle(activeSession())}</span>
+            <h2 id="conversation-heading" class="panel-heading">{formatSessionTitle(activeSession())}</h2>
             <span class="panel-note">
               {pending() ? "streaming" : loadingConversation() ? "loading" : `${bubbles().length} saved messages`}
             </span>
@@ -321,17 +328,16 @@ export function App() {
                   )}
                 </For>
                 <Show when={activeBubble() !== null}>
-                  <article class="bubble assistant active-stream">
-                    <div class="bubble-role">agent</div>
-                    <p>{activeBubble()?.content || "Waiting for response..."}</p>
-                  </article>
+                  <MessageBubble bubble={activeBubble()!} />
                 </Show>
               </Show>
             </Show>
           </div>
 
           <form class="composer" onSubmit={submitPrompt}>
+            <label class="sr-only" for="prompt-input">Message Malkier</label>
             <input
+              id="prompt-input"
               ref={prompt}
               placeholder="Ask Malkier to explain code, debug, or ship a fix"
               disabled={pending()}
@@ -341,9 +347,9 @@ export function App() {
         </section>
 
         <aside class="stack">
-          <section class="panel session-panel">
+          <section class="panel session-panel" aria-labelledby="sessions-heading">
             <div class="panel-title panel-title-row">
-              <span>Sessions</span>
+              <h2 id="sessions-heading" class="panel-heading">Sessions</h2>
               <button type="button" class="ghost-button" onClick={() => startNewSession()} disabled={pending()}>
                 New session
               </button>
@@ -379,8 +385,8 @@ export function App() {
             </div>
           </section>
 
-          <section class="panel">
-            <div class="panel-title">Session Status</div>
+          <section class="panel" aria-labelledby="session-status-heading">
+            <h2 id="session-status-heading" class="panel-title panel-heading">Session Status</h2>
             <dl class="facts">
               <div class="fact">
                 <dt>Current</dt>
@@ -401,11 +407,11 @@ export function App() {
             </dl>
           </section>
 
-          <section class="panel">
-            <div class="panel-title">Persistence Notes</div>
-            <div class="status-copy">{statusLine()}</div>
+          <section class="panel" aria-labelledby="persistence-notes-heading">
+            <h2 id="persistence-notes-heading" class="panel-title panel-heading">Persistence Notes</h2>
+            <div class="status-copy" role="status" aria-live="polite" aria-atomic="true">{statusLine()}</div>
             <Show when={errorMessage() !== null}>
-              <div class="status-copy danger">{errorMessage()}</div>
+              <div class="status-copy danger" role="alert" aria-atomic="true">{errorMessage()}</div>
             </Show>
             <div class="status-copy muted">
               Sessions now load from SQLite, keep their own message history, and can be revisited from the sidebar.
