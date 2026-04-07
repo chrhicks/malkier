@@ -304,15 +304,17 @@ describe("file mutation tools", () => {
         throw new Error("Expected apply_patch success")
       }
 
-      expect(result.result.data.files).toEqual([
-        {
-          path: filePath,
-          action: "updated",
-          addedLines: 1,
-          removedLines: 1,
-          snapshotId: result.result.data.files[0]?.snapshotId ?? ""
-        }
-      ])
+      const files = result.result.data.files
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatchObject({
+        path: filePath,
+        action: "updated",
+        addedLines: 1,
+        removedLines: 1,
+        snapshotId: files[0]?.snapshotId ?? ""
+      })
+      expect(files[0]?.unifiedDiff).toContain("-export const label = \"old\"")
+      expect(files[0]?.unifiedDiff).toContain("+export const label = \"new\"")
       expect(await readWorkspaceTextFile(filePath)).toBe([
         'export const answer = 1',
         'export const label = "new"',

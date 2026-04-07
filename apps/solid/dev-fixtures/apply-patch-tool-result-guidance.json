@@ -1,0 +1,18 @@
+{
+  "status": "guidance",
+  "message": "apply_patch needs a fresh read of the target file before it can proceed.",
+  "data": {
+    "reason": "stale-read-context",
+    "files": [
+      {
+        "path": "scratch/apply-patch-demo.txt",
+        "reason": "stale-read-context"
+      },
+      {
+        "path": "apps/solid/src/App.tsx",
+        "reason": "missing-read-context"
+      }
+    ]
+  },
+  "hints": []
+}

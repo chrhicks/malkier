@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdir, rm, stat } from "node:fs/promises"
 import { isAbsolute, normalize, relative, resolve } from "node:path"
 import { Tool, Toolkit } from "@effect/ai"
+import { createTwoFilesPatch } from "diff"
 import { Effect, Schema } from "effect"
 
 const workspaceRoot = resolve(import.meta.dirname, "../../../../..")
@@ -233,6 +234,21 @@ type PatchPlan = {
   readonly content: string
   readonly addedLines: number
   readonly removedLines: number
+  /** File contents before this patch plan (first read in the session). */
+  readonly baseContent: string
+}
+
+const maxApplyPatchUnifiedDiffChars = 32_000
+
+const formatApplyPatchUnifiedDiff = (workspacePath: string, before: string, after: string): string => {
+  const patch = createTwoFilesPatch(workspacePath, workspacePath, before, after).trimEnd()
+  if (patch.length === 0) {
+    return ""
+  }
+  if (patch.length <= maxApplyPatchUnifiedDiffChars) {
+    return patch
+  }
+  return `${patch.slice(0, maxApplyPatchUnifiedDiffChars)}\n\n... [diff truncated for size]\n`
 }
 
 type ApplyPatchGuidanceReason =
@@ -1186,7 +1202,8 @@ export const ApplyPatchSuccessSchema = Schema.Struct({
         action: Schema.Literal("updated"),
         addedLines: Schema.Number,
         removedLines: Schema.Number,
-        snapshotId: SnapshotId
+        snapshotId: SnapshotId,
+        unifiedDiff: Schema.String
       })
     )
   }),
@@ -1643,7 +1660,8 @@ const makeMutationHandlers = () => ({
               ...existingPlan,
               content: preview.content,
               addedLines: existingPlan.addedLines + preview.addedLines,
-              removedLines: existingPlan.removedLines + preview.removedLines
+              removedLines: existingPlan.removedLines + preview.removedLines,
+              baseContent: existingPlan.baseContent
             })
             continue
           }
@@ -1684,7 +1702,8 @@ const makeMutationHandlers = () => ({
             path: target.workspacePath,
             content: preview.content,
             addedLines: preview.addedLines,
-            removedLines: preview.removedLines
+            removedLines: preview.removedLines,
+            baseContent: existingFile.content
           })
         }
 
@@ -1717,7 +1736,8 @@ const makeMutationHandlers = () => ({
               action: "updated" as const,
               addedLines: plan.addedLines,
               removedLines: plan.removedLines,
-              snapshotId: makeSnapshotId(plan.content)
+              snapshotId: makeSnapshotId(plan.content),
+              unifiedDiff: formatApplyPatchUnifiedDiff(plan.path, plan.baseContent, plan.content)
             }))
           },
           hints: []

@@ -1,0 +1,25 @@
+{
+  "status": "success",
+  "message": "Updated 2 files.",
+  "data": {
+    "files": [
+      {
+        "path": "scratch/apply-patch-demo.txt",
+        "action": "updated",
+        "addedLines": 2,
+        "removedLines": 1,
+        "snapshotId": "7b16af089c863433a1ec37022aa5ea79d3b3ead79dc852d23cdeeba8340ee8ba",
+        "unifiedDiff": "Index: scratch/apply-patch-demo.txt\n===================================================================\n--- scratch/apply-patch-demo.txt\n+++ scratch/apply-patch-demo.txt\n@@ -1,3 +1,3 @@\n line-alpha\n-line-beta\n+line-b2\n line-gamma\n"
+      },
+      {
+        "path": "apps/solid/src/index.css",
+        "action": "updated",
+        "addedLines": 0,
+        "removedLines": 0,
+        "snapshotId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "unifiedDiff": ""
+      }
+    ]
+  },
+  "hints": []
+}

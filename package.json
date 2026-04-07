@@ -2,6 +2,9 @@
   "name": "malkier",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "dev:tmux": "bash scripts/malkier-dev-tmux.sh"
+  },
   "workspaces": [
     "packages/*",
     "apps/*"

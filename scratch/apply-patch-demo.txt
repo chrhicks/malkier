@@ -1,0 +1,6 @@
+# Apply patch UI demo target
+# Safe to edit — used to exercise apply_patch in Malkier.
+
+line-alpha
+line-b2
+line-gamma

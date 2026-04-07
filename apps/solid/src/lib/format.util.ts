@@ -48,6 +48,190 @@ export const humanizeToolName = (toolName: string) =>
     .map((part) => titleCase(part))
     .join(" ")
 
+/** Successful `read_file` tool JSON: show `data.content` as source instead of raw JSON. */
+export type ReadFileToolSuccessDisplay = {
+  readonly path: string
+  readonly startLine: number
+  readonly endLine: number
+  readonly totalLines: number
+  readonly truncated: boolean
+  readonly content: string
+}
+
+export const parseReadFileToolSuccessDisplay = (
+  toolName: string,
+  payload: string,
+): ReadFileToolSuccessDisplay | null => {
+  if (toolName !== "read_file") {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>
+    if (parsed.status !== "success") {
+      return null
+    }
+
+    const data = parsed.data
+    if (data == null || typeof data !== "object") {
+      return null
+    }
+
+    const record = data as Record<string, unknown>
+    if (typeof record.content !== "string") {
+      return null
+    }
+
+    const path = typeof record.path === "string" ? record.path : ""
+    const startLine = typeof record.startLine === "number" && Number.isFinite(record.startLine) ? record.startLine : 1
+    const endLine = typeof record.endLine === "number" && Number.isFinite(record.endLine) ? record.endLine : startLine
+    const totalLines = typeof record.totalLines === "number" && Number.isFinite(record.totalLines) ? record.totalLines : endLine
+    const truncated = record.truncated === true
+
+    return {
+      path,
+      startLine,
+      endLine,
+      totalLines,
+      truncated,
+      content: record.content,
+    }
+  } catch {
+    return null
+  }
+}
+
+const applyPatchReasonLabels: Record<string, string> = {
+  "missing-read-context": "Read the file first (snapshot missing).",
+  "stale-read-context": "Re-read the file; snapshot is stale.",
+  "patch-context-not-found": "Patch context not found in file.",
+  "patch-context-ambiguous": "Patch context matched multiple places.",
+  "create-not-allowed": "Cannot create files with apply_patch — use write_file.",
+  "delete-not-allowed": "Cannot delete with apply_patch — use delete_file.",
+  "not-implemented": "Patch operation not implemented.",
+}
+
+export const humanizeApplyPatchReason = (reason: string) =>
+  applyPatchReasonLabels[reason] ?? reason.replace(/-/g, " ")
+
+export type ApplyPatchSuccessFileRow = {
+  readonly path: string
+  readonly action: "updated"
+  readonly addedLines: number
+  readonly removedLines: number
+  readonly snapshotId: string
+  /** Present for new API results; omitted in older persisted sessions. */
+  readonly unifiedDiff?: string
+}
+
+/** `apply_patch` tool JSON: success or guidance (structured UI instead of raw JSON). */
+export type ApplyPatchToolDisplay =
+  | {
+      readonly kind: "success"
+      readonly message: string
+      readonly files: ReadonlyArray<ApplyPatchSuccessFileRow>
+    }
+  | {
+      readonly kind: "guidance"
+      readonly message: string
+      readonly primaryReason: string
+      readonly files: ReadonlyArray<{ readonly path: string; readonly reason: string }>
+    }
+
+const isApplyPatchSuccessFile = (value: unknown): value is ApplyPatchSuccessFileRow => {
+  if (value == null || typeof value !== "object") {
+    return false
+  }
+  const row = value as Record<string, unknown>
+  if (
+    typeof row.path !== "string" ||
+    row.action !== "updated" ||
+    typeof row.addedLines !== "number" ||
+    !Number.isFinite(row.addedLines) ||
+    typeof row.removedLines !== "number" ||
+    !Number.isFinite(row.removedLines) ||
+    typeof row.snapshotId !== "string"
+  ) {
+    return false
+  }
+  if (row.unifiedDiff != null && typeof row.unifiedDiff !== "string") {
+    return false
+  }
+  return true
+}
+
+const isApplyPatchGuidanceFile = (value: unknown): value is { path: string; reason: string } => {
+  if (value == null || typeof value !== "object") {
+    return false
+  }
+  const row = value as Record<string, unknown>
+  return typeof row.path === "string" && typeof row.reason === "string"
+}
+
+export const parseApplyPatchToolDisplay = (
+  toolName: string,
+  payload: string,
+): ApplyPatchToolDisplay | null => {
+  if (toolName !== "apply_patch") {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>
+    const message = typeof parsed.message === "string" ? parsed.message : ""
+    const data = parsed.data
+
+    if (data == null || typeof data !== "object") {
+      return null
+    }
+
+    const record = data as Record<string, unknown>
+
+    if (parsed.status === "success") {
+      const filesRaw = record.files
+      if (!Array.isArray(filesRaw) || filesRaw.length === 0) {
+        return null
+      }
+
+      const files = filesRaw.filter(isApplyPatchSuccessFile)
+      if (files.length !== filesRaw.length) {
+        return null
+      }
+
+      return {
+        kind: "success",
+        message,
+        files,
+      }
+    }
+
+    if (parsed.status === "guidance") {
+      const filesRaw = record.files
+      if (!Array.isArray(filesRaw) || filesRaw.length === 0) {
+        return null
+      }
+
+      const files = filesRaw.filter(isApplyPatchGuidanceFile)
+      if (files.length !== filesRaw.length) {
+        return null
+      }
+
+      const primaryReason = typeof record.reason === "string" ? record.reason : files[0]?.reason ?? "unknown"
+
+      return {
+        kind: "guidance",
+        message: message || "Patch could not be applied.",
+        primaryReason,
+        files,
+      }
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
+
 export const toolArgsFromParams = (params: unknown): BubbleArgument[] => {
   if (Array.isArray(params)) {
     return params.map((value, index) => ({
