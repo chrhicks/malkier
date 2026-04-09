@@ -10,6 +10,7 @@ import { json } from "../request-utils"
 import { SessionService, type SessionMessageWithMetadata } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import { getAgentTools } from "../agent/tools"
+import { malkierBaseSystemPrompt } from "../agent/prompts/base-system-prompt"
 import { HoneycombObservabilityLive } from "../observability/honeycomb"
 import withHttpObservability from "../server/http-observability"
 
@@ -31,15 +32,6 @@ const sseFrame = (event: string, data: unknown): Uint8Array =>
   encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 
 const streamFailureMessage = "Agent stream failed"
-
-const agentSystemPrompt = [
-  "You are Malkier, an assistant that can use tools.",
-  "When a user's request can be advanced with an available tool, call the tool instead of only describing what you would do.",
-  "If the user asks you to test, inspect, or use tools, make at least one relevant tool call before your final answer unless the request is impossible or unsafe.",
-  "Do not ask for confirmation before making a safe, relevant tool call.",
-  "Work efficiently: prefer targeted tool calls, avoid repeating the same exploration without a clear reason, and stop once you have enough evidence to answer.",
-  "For longer requests, synthesize what you have learned as you go and explicitly wrap up with findings, remaining uncertainty, and the best next step when further tool use is unnecessary."
-].join(" ")
 
 type StreamStopReason =
   | 'done'
@@ -460,9 +452,9 @@ export const collectPrompt = (messages: SessionMessageWithMetadata[]): Prompt.Ra
 export const createPrompt = (messages: SessionMessageWithMetadata[]): Prompt.RawInput =>
   Prompt.empty.pipe(
     Prompt.merge(
-      Prompt.fromMessages([
-        Prompt.makeMessage("system", {
-          content: agentSystemPrompt
+        Prompt.fromMessages([
+          Prompt.makeMessage("system", {
+          content: malkierBaseSystemPrompt
         })
       ])
     ),

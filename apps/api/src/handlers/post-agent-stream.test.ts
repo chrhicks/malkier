@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Prompt, Response } from "@effect/ai"
+import { malkierBaseSystemPrompt } from "../agent/prompts/base-system-prompt"
 import { collectPrompt } from "./post-agent-stream"
 import { createPrompt } from "./post-agent-stream"
 import type { SessionMessageWithMetadata } from "../service/session.service"
@@ -200,7 +201,7 @@ describe("collectPrompt", () => {
     ])
   })
 
-  test("createPrompt prepends the tool-use system instructions", () => {
+  test("createPrompt prepends the base system prompt", () => {
     const actual = Prompt.make(createPrompt([
       makeSessionMessage({
         role: "user",
@@ -213,7 +214,7 @@ describe("collectPrompt", () => {
 
     expect(normalized[0]).toEqual({
       role: "system",
-      content: "You are Malkier, an assistant that can use tools. When a user's request can be advanced with an available tool, call the tool instead of only describing what you would do. If the user asks you to test, inspect, or use tools, make at least one relevant tool call before your final answer unless the request is impossible or unsafe. Do not ask for confirmation before making a safe, relevant tool call. Work efficiently: prefer targeted tool calls, avoid repeating the same exploration without a clear reason, and stop once you have enough evidence to answer. For longer requests, synthesize what you have learned as you go and explicitly wrap up with findings, remaining uncertainty, and the best next step when further tool use is unnecessary."
+      content: malkierBaseSystemPrompt
     })
     expect(normalized[1]).toEqual({
       role: "user",
