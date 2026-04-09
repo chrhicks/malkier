@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises"
 import { isAbsolute, normalize, relative, resolve } from "node:path"
 import { Tool, Toolkit } from "@effect/ai"
 import { Effect, Schema } from "effect"
+import { annotateCurrentSpanAttributes } from "../../observability/span-attributes"
 
 const workspaceRoot = resolve(import.meta.dirname, "../../../../..")
 const defaultTimeoutMs = 30_000
@@ -248,8 +249,22 @@ const executeBash = Effect.fn("ShellTools.executeBash")(function* ({
   cwd: string | null
   timeoutMs: number
 }) {
-  const resolvedCwd = yield* resolveShellCwd(cwd)
   const normalizedTimeoutMs = sanitizeTimeoutMs(timeoutMs)
+
+  yield* annotateCurrentSpanAttributes({
+    "tool.name": "bash",
+    "tool.command": command,
+    "tool.cwd.requested": cwd ?? ".",
+    "tool.timeout_ms": normalizedTimeoutMs,
+    "tool.args.count": args.length
+  })
+
+  const resolvedCwd = yield* resolveShellCwd(cwd)
+
+  yield* annotateCurrentSpanAttributes({
+    "tool.cwd": resolvedCwd.workspacePath,
+    "tool.cwd.resolved": resolvedCwd.workspacePath
+  })
 
   return yield* Effect.tryPromise({
     try: async () => {
@@ -351,11 +366,36 @@ export const makeShellToolkitLayer = () =>
     ShellToolkit.of({
       bash: ({ command, args, cwd, timeoutMs }) =>
         executeBash({ command, args, cwd, timeoutMs }).pipe(
+          Effect.tap((result) =>
+            annotateCurrentSpanAttributes({
+              "tool.result.class": "ok",
+              "tool.exit_code": result.exitCode,
+              "tool.duration_ms": result.durationMs
+            })
+          ),
           Effect.catchTags({
-            InvalidCwdError: (error) => Effect.fail(toShellToolFailure(error)),
-            BashSpawnError: (error) => Effect.fail(toShellToolFailure(error)),
-            BashTimeoutError: (error) => Effect.fail(toShellToolFailure(error)),
-            BashNonZeroExitError: (error) => Effect.fail(toShellToolFailure(error))
+            InvalidCwdError: (error) =>
+              annotateCurrentSpanAttributes({
+                "tool.result.class": "forbidden"
+              }).pipe(Effect.zipRight(Effect.fail(toShellToolFailure(error)))),
+            BashSpawnError: (error) =>
+              annotateCurrentSpanAttributes({
+                "tool.result.class": "spawn_failed"
+              }).pipe(Effect.zipRight(Effect.fail(toShellToolFailure(error)))),
+            BashTimeoutError: (error) =>
+              annotateCurrentSpanAttributes({
+                "tool.result.class": "timeout",
+                "tool.exit_code": error.exitCode ?? undefined,
+                "tool.signal": error.signal ?? undefined,
+                "tool.duration_ms": error.durationMs
+              }).pipe(Effect.zipRight(Effect.fail(toShellToolFailure(error)))),
+            BashNonZeroExitError: (error) =>
+              annotateCurrentSpanAttributes({
+                "tool.result.class": "non_zero_exit",
+                "tool.exit_code": error.exitCode,
+                "tool.signal": error.signal ?? undefined,
+                "tool.duration_ms": error.durationMs
+              }).pipe(Effect.zipRight(Effect.fail(toShellToolFailure(error))))
           })
         )
     })

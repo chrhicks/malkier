@@ -126,4 +126,25 @@ describe("ShellToolkit", () => {
     expect(result.result.cwd).toBe(".")
     expect(result.result.durationMs).toBeGreaterThanOrEqual(0)
   })
+
+  test("returns structured failures for spawn failures", async () => {
+    const toolkit = await getToolkit()
+    const result = await Effect.runPromise(
+      toolkit.handle("bash", {
+        command: "definitely-not-a-real-command-malkier",
+        args: [],
+        cwd: null,
+        timeoutMs: 5_000
+      })
+    )
+
+    expect(result.isFailure).toBe(true)
+    if (!result.isFailure || !("kind" in result.result)) {
+      return
+    }
+
+    expect(result.result.kind).toBe("spawn-failed")
+    expect(result.result.command).toBe("definitely-not-a-real-command-malkier")
+    expect(result.result.cwd).toBe(".")
+  })
 })
