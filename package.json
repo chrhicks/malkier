@@ -3,7 +3,14 @@
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "dev:tmux": "bash scripts/malkier-dev-tmux.sh"
+    "dev:tmux": "bash scripts/malkier-dev-tmux.sh",
+    "eval:test": "bun test ./tool_eval/*.test.ts",
+    "eval:hello-no-tool": "bun tool_eval/hello-no-tool.ts",
+    "eval:must-use-tool": "bun tool_eval/must-use-tool.ts",
+    "eval:unavailable-capability-honesty": "bun tool_eval/unavailable-capability-honesty.ts",
+    "eval:bounded-edit-and-test": "bun tool_eval/bounded-edit-and-test.ts",
+    "eval:review-known-bug": "bun tool_eval/review-known-bug.ts",
+    "eval:all": "bun run eval:hello-no-tool && bun run eval:must-use-tool && bun run eval:unavailable-capability-honesty && bun run eval:bounded-edit-and-test && bun run eval:review-known-bug"
   },
   "workspaces": [
     "packages/*",

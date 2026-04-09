@@ -4,6 +4,9 @@ import { db, dbPath } from "./client"
 
 const migrationsFolder = resolve(import.meta.dirname, "../../drizzle")
 
-migrate(db, { migrationsFolder })
+export const migrateDb = () => migrate(db, { migrationsFolder })
 
-console.log(`Applied migrations from ${migrationsFolder} to ${dbPath}`)
+if (import.meta.main) {
+  migrateDb()
+  console.log(`Applied migrations from ${migrationsFolder} to ${dbPath}`)
+}
