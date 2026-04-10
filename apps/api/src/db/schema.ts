@@ -56,9 +56,28 @@ export const sessionMessages = sqliteTable(
   ]
 )
 
+export const sessionRuns = sqliteTable(
+  "session_runs",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    metadata: text("metadata").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`)
+  },
+  (table) => [
+    index("idx_session_runs_session_created").on(table.sessionId, table.createdAt)
+  ]
+)
+
 export type Session = typeof sessions.$inferSelect
 export type NewSession = typeof sessions.$inferInsert
 export type SessionMessage = typeof sessionMessages.$inferSelect
 export type NewSessionMessage = typeof sessionMessages.$inferInsert
+export type SessionRun = typeof sessionRuns.$inferSelect
+export type NewSessionRun = typeof sessionRuns.$inferInsert
 export type SessionMessageRole = NewSessionMessage['role']
 export type SessionMessageStatus = NewSessionMessage['status']

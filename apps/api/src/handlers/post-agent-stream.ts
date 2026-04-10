@@ -10,6 +10,7 @@ import { SessionService } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import { getAgentTools } from "../agent/tools"
 import { PromptAssembler } from "../agent/prompt-assembler"
+import { createPromptRunMetadata } from "../agent/prompt-run-metadata"
 import { HoneycombObservabilityLive } from "../observability/honeycomb"
 import withHttpObservability from "../server/http-observability"
 
@@ -446,9 +447,16 @@ export const postAgentStream = (request: Request) =>
         explicitMode: parsed.mode,
         selectedSkills: parsed.selectedSkills
       }).pipe(Effect.provide(PromptAssembler.Default))
+      const promptRunMetadata = createPromptRunMetadata(assembledPrompt)
+      yield* SessionService.insertSessionRun({
+        sessionId: session.sessionId,
+        metadata: promptRunMetadata
+      })
       yield* annotateCurrentSpanAttributes({
         "agent.mode.resolved": assembledPrompt.resolvedMode,
-        "agent.skills.resolved": assembledPrompt.selectedSkills.join(",")
+        "agent.skills.resolved": assembledPrompt.selectedSkills.join(","),
+        "prompt.layer.count": promptRunMetadata.layers.length,
+        "prompt.repo.loaded": promptRunMetadata.rootAgentsLoaded
       })
       const parentSpan = yield* OtelTracer.currentOtelSpan.pipe(
         Effect.map((span) => span.spanContext()),

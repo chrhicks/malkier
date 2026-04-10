@@ -3,6 +3,22 @@ import type { PersistedPromptMetadata } from "./persisted-prompt"
 export type SessionStatus = "active" | "archived" | "deleted"
 export type SessionMessageRole = "system" | "user" | "assistant" | "tool"
 export type SessionMessageStatus = "streaming" | "complete" | "error"
+export type PromptLayerKind = "base" | "runtime" | "repo" | "mode" | "skill" | "subagent" | "soft-stop"
+
+export interface PromptRunLayer {
+  readonly order: number
+  readonly id: string
+  readonly kind: PromptLayerKind
+  readonly source: string
+  readonly sha256: string
+}
+
+export interface PromptRunMetadata {
+  readonly resolvedMode: "default" | "review"
+  readonly selectedSkills: string[]
+  readonly rootAgentsLoaded: boolean
+  readonly layers: PromptRunLayer[]
+}
 
 export interface SessionSummary {
   readonly id: string
@@ -28,6 +44,7 @@ export interface SessionMessage {
 export interface SessionDetail {
   readonly session: SessionSummary
   readonly messages: SessionMessage[]
+  readonly latestRun: PromptRunMetadata | null
 }
 
 const USER_ID_STORAGE_KEY = "malkier.user-id"

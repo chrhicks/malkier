@@ -120,7 +120,8 @@ describe("getSessionTools", () => {
               content: "Here it is",
               sequence: 2
             })
-          ]
+          ],
+          latestRun: null
         })
       }
     })

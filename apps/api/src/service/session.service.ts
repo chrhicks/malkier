@@ -1,10 +1,11 @@
 import { Effect } from "effect"
 import { annotateCurrentSpanAttributes } from "../observability/span-attributes"
 import { db } from "../db/client"
-import { sessionMessages, sessions, type SessionMessage, type SessionMessageRole, type SessionMessageStatus } from "../db/schema"
+import { sessionMessages, sessionRuns, sessions, type SessionMessage, type SessionMessageRole, type SessionMessageStatus } from "../db/schema"
 import { asc, desc, eq, max } from "drizzle-orm"
 import { InternalError, SessionNotFoundError, SessionOwnershipError } from "../errors"
 import { decodeToolMetadata, type PromptMetadata } from "../agent/persisted-prompts"
+import { decodePromptRunMetadata, type PromptRunMetadata } from "../agent/prompt-run-metadata"
 
 const makeSessionTitle = (message: string) => {
   const normalized = message.trim().replace(/\s+/g, " ")
@@ -24,6 +25,11 @@ const decodeMetadata = (metadata: string | null) =>
   metadata == null
     ? Effect.succeed(null)
     : decodeToolMetadata(metadata)
+
+const decodeRunMetadata = (metadata: string) =>
+  decodePromptRunMetadata(metadata).pipe(
+    Effect.mapError((error) => new InternalError({ message: `Failed to decode prompt run metadata: ${String(error)}` }))
+  )
 
 const decodeMessage = (message: SessionMessage) =>
   Effect.gen(function* () {
@@ -235,10 +241,69 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
 
       const messages = yield* Effect.forEach(dbMessages, decodeMessage)
 
+      const latestRunRow = yield* withDbSpan(
+        "db.session_runs.find_first",
+        {
+          "db.operation": "select",
+          "db.table": "session_runs",
+          "session.id": sessionId,
+          "user.id": userId
+        },
+        Effect.tryPromise({
+          try: () =>
+            db.select()
+              .from(sessionRuns)
+              .where(eq(sessionRuns.sessionId, sessionId))
+              .orderBy(desc(sessionRuns.createdAt))
+              .limit(1),
+          catch: (error) => new InternalError({ message: `Failed to load session runs: ${String(error)}` })
+        }),
+        (rows) =>
+          annotateCurrentSpanAttributes({
+            "db.row_count": rows.length
+          })
+      )
+
+      const latestRun = latestRunRow[0] == null
+        ? null
+        : yield* decodeRunMetadata(latestRunRow[0].metadata)
+
       return {
         session,
-        messages
+        messages,
+        latestRun
       }
+    })
+
+    const insertSessionRun = Effect.fn("SessionService.insertSessionRun")(function* ({
+      sessionId,
+      metadata
+    }: {
+      sessionId: string,
+      metadata: PromptRunMetadata
+    }) {
+      const now = new Date()
+
+      yield* withDbSpan(
+        "db.session_runs.insert",
+        {
+          "db.operation": "insert",
+          "db.table": "session_runs",
+          "session.id": sessionId,
+          "prompt.layer.count": metadata.layers.length,
+          "agent.mode.resolved": metadata.resolvedMode
+        },
+        Effect.tryPromise({
+          try: () =>
+            db.insert(sessionRuns).values({
+              id: crypto.randomUUID(),
+              sessionId,
+              metadata: JSON.stringify(metadata),
+              createdAt: now
+            }),
+          catch: (error) => new InternalError({ message: `Failed to insert session run metadata: ${String(error)}` })
+        })
+      )
     })
 
     const insertSessionMessage = Effect.fn('SessionService.insertSessionMessage')(function* ({
@@ -335,6 +400,7 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       getSession,
       nextMessageSequence,
       insertSessionMessage,
+      insertSessionRun,
       listSessions,
     }
   })
