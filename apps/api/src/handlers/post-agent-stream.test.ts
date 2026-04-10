@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Prompt, Response } from "@effect/ai"
-import { malkierBaseSystemPrompt } from "../agent/prompts/base-system-prompt"
-import { collectPrompt } from "./post-agent-stream"
-import { createPrompt } from "./post-agent-stream"
+import { createHash } from "node:crypto"
+import { assemblePrompt, collectPrompt, softStopPromptSource } from "../agent/prompt-assembler"
+import { malkierBaseSystemPrompt, malkierBaseSystemPromptSource } from "../agent/prompts/base-system-prompt"
 import type { SessionMessageWithMetadata } from "../service/session.service"
 
 const makeSessionMessage = (
@@ -201,17 +201,32 @@ describe("collectPrompt", () => {
     ])
   })
 
-  test("createPrompt prepends the base system prompt", () => {
-    const actual = Prompt.make(createPrompt([
-      makeSessionMessage({
-        role: "user",
-        content: "Please use your tools.",
-        sequence: 1
-      })
-    ]))
+  test("assemblePrompt prepends the base system prompt and returns layer metadata", () => {
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Please use your tools.",
+          sequence: 1
+        })
+      ]
+    })
+    const actual = Prompt.make(assembled.prompt)
 
     const normalized = normalizePrompt(actual)
 
+    expect(assembled.resolvedMode).toBe("default")
+    expect(assembled.selectedSkills).toEqual([])
+    expect(assembled.layers).toEqual([
+      {
+        id: `base:${createHash("sha256").update(malkierBaseSystemPrompt).digest("hex").slice(0, 12)}`,
+        kind: "base",
+        role: "system",
+        source: malkierBaseSystemPromptSource,
+        content: malkierBaseSystemPrompt,
+        sha256: createHash("sha256").update(malkierBaseSystemPrompt).digest("hex")
+      }
+    ])
     expect(normalized[0]).toEqual({
       role: "system",
       content: malkierBaseSystemPrompt
@@ -219,6 +234,46 @@ describe("collectPrompt", () => {
     expect(normalized[1]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Please use your tools." }]
+    })
+  })
+
+  test("assemblePrompt appends the soft-stop layer before conversation history when requested", () => {
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Wrap up now.",
+          sequence: 1
+        })
+      ],
+      explicitMode: "review",
+      selectedSkills: ["coding-standards"],
+      nearSoftStop: true
+    })
+    const normalized = normalizePrompt(Prompt.make(assembled.prompt))
+    const softStopLayer = assembled.layers[1]!
+
+    expect(assembled.resolvedMode).toBe("review")
+    expect(assembled.selectedSkills).toEqual(["coding-standards"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "soft-stop"])
+    expect(softStopLayer.source).toBe(softStopPromptSource)
+    expect(softStopLayer.sha256).toBe(
+      createHash("sha256")
+        .update(softStopLayer.content)
+        .digest("hex")
+    )
+
+    expect(normalized[0]).toEqual({
+      role: "system",
+      content: malkierBaseSystemPrompt
+    })
+    expect(normalized[1]).toEqual({
+      role: "system",
+      content: softStopLayer.content
+    })
+    expect(normalized[2]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Wrap up now." }]
     })
   })
 

@@ -1,16 +1,15 @@
 import { Agent, layerConfig } from "@malkier/agent"
 import { Tracer as OtelTracer } from "@effect/opentelemetry"
 import { Cause, Config, Effect, Fiber, Layer, Option, Stream } from "effect"
-import { Response as EffectResponse } from "@effect/ai"
 import type { SpanContext } from "@opentelemetry/api"
 import { PostAgentMessageRequest } from "../schema"
 import { BadRequestError, InternalError, SessionOwnershipError, StreamTimeoutError } from "../errors"
 import { annotateCurrentSpanAttributes } from "../observability/span-attributes"
 import { json } from "../request-utils"
-import { SessionService, type SessionMessageWithMetadata } from "../service/session.service"
+import { SessionService } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import { getAgentTools } from "../agent/tools"
-import { malkierBaseSystemPrompt } from "../agent/prompts/base-system-prompt"
+import { PromptAssembler } from "../agent/prompt-assembler"
 import { HoneycombObservabilityLive } from "../observability/honeycomb"
 import withHttpObservability from "../server/http-observability"
 
@@ -393,74 +392,6 @@ const makeStreamResponse = ({
   })
 }
 
-export const collectPrompt = (messages: SessionMessageWithMetadata[]): Prompt.RawInput => {
-  let prompt = Prompt.empty
-  let responseParts: EffectResponse.AnyPart[] = []
-
-  const flushResponseParts = () => {
-    if (responseParts.length === 0) return
-
-    prompt = Prompt.merge(prompt, Prompt.fromResponseParts(responseParts))
-    responseParts = []
-  }
-
-  for (const msg of messages) {
-    if (msg.metadata?.kind === 'tool-call') {
-      responseParts.push(EffectResponse.makePart('tool-call', {
-        id: msg.metadata?.id,
-        name: msg.metadata?.name,
-        params: msg.metadata?.params,
-        providerExecuted: false
-      }))
-      continue
-    }
-
-    if (msg.metadata?.kind === 'tool-result') {
-      responseParts.push(EffectResponse.makePart('tool-result', {
-        id: msg.metadata?.id,
-        name: msg.metadata?.name,
-        result: msg.metadata?.result,
-        encodedResult: msg.metadata?.result,
-        isFailure: msg.metadata?.isFailure,
-        providerExecuted: false
-      }))
-      continue
-    }
-
-    if (msg.role === 'assistant' && responseParts.length > 0) {
-      responseParts.push(EffectResponse.makePart('text', { text: msg.content }))
-      continue
-    }
-
-    flushResponseParts()
-
-    prompt = Prompt.merge(
-      prompt,
-      Prompt.fromMessages([
-        Prompt.makeMessage(msg.role, {
-          content: [Prompt.makePart('text', { text: msg.content })]
-        })
-      ])
-    )
-  }
-
-  flushResponseParts()
-
-  return prompt
-}
-
-export const createPrompt = (messages: SessionMessageWithMetadata[]): Prompt.RawInput =>
-  Prompt.empty.pipe(
-    Prompt.merge(
-        Prompt.fromMessages([
-          Prompt.makeMessage("system", {
-          content: malkierBaseSystemPrompt
-        })
-      ])
-    ),
-    Prompt.merge(collectPrompt(messages))
-  )
-
 export const postAgentStream = (request: Request) =>
   withHttpObservability(
     'http.post-agent-stream',
@@ -508,7 +439,9 @@ export const postAgentStream = (request: Request) =>
         userId: parsed.userId,
         sessionId: session.sessionId
       })
-      const prompt = createPrompt(loadedSession.messages)
+      const assembledPrompt = yield* PromptAssembler.assemble({
+        messages: loadedSession.messages
+      }).pipe(Effect.provide(PromptAssembler.Default))
       const parentSpan = yield* OtelTracer.currentOtelSpan.pipe(
         Effect.map((span) => span.spanContext()),
         Effect.option
@@ -516,7 +449,7 @@ export const postAgentStream = (request: Request) =>
 
       return makeStreamResponse({
         sessionService,
-        prompt,
+        prompt: assembledPrompt.prompt,
         promptMessageCount: loadedSession.messages.length,
         userId: parsed.userId,
         sessionId: session.sessionId,
