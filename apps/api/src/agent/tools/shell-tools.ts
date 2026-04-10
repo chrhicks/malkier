@@ -3,8 +3,8 @@ import { isAbsolute, normalize, relative, resolve } from "node:path"
 import { Tool, Toolkit } from "@effect/ai"
 import { Effect, Schema } from "effect"
 import { annotateCurrentSpanAttributes } from "../../observability/span-attributes"
+import { workspaceRoot } from "../../workspace-root"
 
-const workspaceRoot = resolve(import.meta.dirname, "../../../../..")
 const defaultTimeoutMs = 30_000
 const maxOutputChars = 16_000
 

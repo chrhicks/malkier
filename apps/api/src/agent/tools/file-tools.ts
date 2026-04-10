@@ -4,8 +4,8 @@ import { isAbsolute, normalize, relative, resolve } from "node:path"
 import { Tool, Toolkit } from "@effect/ai"
 import { createTwoFilesPatch } from "diff"
 import { Effect, Schema } from "effect"
+import { workspaceRoot } from "../../workspace-root"
 
-const workspaceRoot = resolve(import.meta.dirname, "../../../../..")
 const gitignorePath = resolve(workspaceRoot, ".gitignore")
 const defaultReadLines = 200
 const defaultGlobResults = 200

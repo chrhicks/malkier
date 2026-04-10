@@ -4,9 +4,8 @@ import { dirname, resolve } from "node:path"
 import { Effect } from "effect"
 import { FileToolkit, makeFileToolkitLayer } from "./file-tools"
 import type { SessionService } from "../../service/session.service"
+import { workspaceRoot } from "../../workspace-root"
 import { getAgentTools } from "."
-
-const workspaceRoot = resolve(import.meta.dirname, "../../../../..")
 
 const getAgentToolkit = () =>
   Effect.runPromise(getAgentTools("user-1", {

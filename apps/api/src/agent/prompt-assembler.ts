@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { Prompt, Response as EffectResponse } from "@effect/ai"
 import { Effect } from "effect"
 import { malkierBaseSystemPrompt, malkierBaseSystemPromptSource } from "./prompts/base-system-prompt"
 import type { SessionMessageWithMetadata } from "../service/session.service"
+import { workspaceRoot } from "../workspace-root"
 
 export type PromptLayerKind = "base" | "runtime" | "repo" | "mode" | "skill" | "subagent" | "soft-stop"
 
@@ -37,6 +40,13 @@ export type AssembledPrompt = {
   readonly selectedSkills: ReadonlyArray<string>
 }
 
+type AssemblePromptOptions = {
+  readonly rootAgentsLayer?: PromptLayer | null
+}
+
+const rootAgentsPromptFile = resolve(workspaceRoot, "AGENTS.md")
+
+export const rootAgentsPromptSource = "AGENTS.md"
 export const softStopPromptSource = "@malkier/agent/soft-stop"
 
 const softStopPrompt = [
@@ -47,6 +57,12 @@ const softStopPrompt = [
 ].join(" ")
 
 const hashContent = (content: string) => createHash("sha256").update(content).digest("hex")
+
+const isMissingFileError = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code === "ENOENT"
 
 const makePromptLayer = (kind: PromptLayerKind, source: string, content: string): PromptLayer => {
   const sha256 = hashContent(content)
@@ -70,6 +86,28 @@ const appendSystemLayer = (prompt: Prompt.Prompt, layer: PromptLayer): Prompt.Pr
       })
     ])
   )
+
+const readPromptFileIfPresent = (filePath: string): string | null => {
+  try {
+    return readFileSync(filePath, "utf8").trim()
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null
+    }
+
+    throw error
+  }
+}
+
+export const loadRootAgentsPromptLayer = (filePath = rootAgentsPromptFile): PromptLayer | null => {
+  const content = readPromptFileIfPresent(filePath)
+
+  if (content == null || content.length === 0) {
+    return null
+  }
+
+  return makePromptLayer("repo", rootAgentsPromptSource, content)
+}
 
 export const collectPrompt = (messages: ReadonlyArray<SessionMessageWithMetadata>): Prompt.Prompt => {
   let prompt = Prompt.empty
@@ -132,12 +170,19 @@ export const assemblePrompt = ({
   explicitMode,
   selectedSkills,
   nearSoftStop
-}: AssemblePromptInput): AssembledPrompt => {
+}: AssemblePromptInput, options: AssemblePromptOptions = {}): AssembledPrompt => {
   const resolvedMode = explicitMode ?? "default"
   const resolvedSkills = [...(selectedSkills ?? [])]
+  const rootAgentsLayer = options.rootAgentsLayer === undefined
+    ? loadRootAgentsPromptLayer()
+    : options.rootAgentsLayer
   const layers: Array<PromptLayer> = [
     makePromptLayer("base", malkierBaseSystemPromptSource, malkierBaseSystemPrompt)
   ]
+
+  if (rootAgentsLayer !== null) {
+    layers.push(rootAgentsLayer)
+  }
 
   if (nearSoftStop === true) {
     layers.push(makePromptLayer("soft-stop", softStopPromptSource, softStopPrompt))

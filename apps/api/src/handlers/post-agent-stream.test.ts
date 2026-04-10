@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { Prompt, Response } from "@effect/ai"
 import { createHash } from "node:crypto"
-import { assemblePrompt, collectPrompt, softStopPromptSource } from "../agent/prompt-assembler"
+import {
+  assemblePrompt,
+  collectPrompt,
+  loadRootAgentsPromptLayer,
+  rootAgentsPromptSource,
+  softStopPromptSource
+} from "../agent/prompt-assembler"
 import { malkierBaseSystemPrompt, malkierBaseSystemPromptSource } from "../agent/prompts/base-system-prompt"
 import type { SessionMessageWithMetadata } from "../service/session.service"
 
@@ -202,6 +208,10 @@ describe("collectPrompt", () => {
   })
 
   test("assemblePrompt prepends the base system prompt and returns layer metadata", () => {
+    const rootAgentsLayer = loadRootAgentsPromptLayer()
+
+    expect(rootAgentsLayer).not.toBeNull()
+
     const assembled = assemblePrompt({
       messages: [
         makeSessionMessage({
@@ -225,19 +235,48 @@ describe("collectPrompt", () => {
         source: malkierBaseSystemPromptSource,
         content: malkierBaseSystemPrompt,
         sha256: createHash("sha256").update(malkierBaseSystemPrompt).digest("hex")
-      }
+      },
+      rootAgentsLayer!
     ])
     expect(normalized[0]).toEqual({
       role: "system",
       content: malkierBaseSystemPrompt
     })
     expect(normalized[1]).toEqual({
+      role: "system",
+      content: rootAgentsLayer!.content
+    })
+    expect(normalized[2]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Please use your tools." }]
+    })
+  })
+
+  test("assemblePrompt skips the repo layer cleanly when the root AGENTS.md file is missing", () => {
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Please use your tools.",
+          sequence: 1
+        })
+      ]
+    }, {
+      rootAgentsLayer: loadRootAgentsPromptLayer(`/tmp/missing-agents-${crypto.randomUUID()}.md`)
+    })
+
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base"])
+    expect(normalizePrompt(Prompt.make(assembled.prompt))[1]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Please use your tools." }]
     })
   })
 
   test("assemblePrompt appends the soft-stop layer before conversation history when requested", () => {
+    const rootAgentsLayer = loadRootAgentsPromptLayer()
+
+    expect(rootAgentsLayer).not.toBeNull()
+
     const assembled = assemblePrompt({
       messages: [
         makeSessionMessage({
@@ -251,11 +290,13 @@ describe("collectPrompt", () => {
       nearSoftStop: true
     })
     const normalized = normalizePrompt(Prompt.make(assembled.prompt))
-    const softStopLayer = assembled.layers[1]!
+    const softStopLayer = assembled.layers[2]!
 
     expect(assembled.resolvedMode).toBe("review")
     expect(assembled.selectedSkills).toEqual(["coding-standards"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "soft-stop"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "soft-stop"])
+    expect(assembled.layers[1]).toEqual(rootAgentsLayer!)
+    expect(assembled.layers[1]?.source).toBe(rootAgentsPromptSource)
     expect(softStopLayer.source).toBe(softStopPromptSource)
     expect(softStopLayer.sha256).toBe(
       createHash("sha256")
@@ -269,9 +310,13 @@ describe("collectPrompt", () => {
     })
     expect(normalized[1]).toEqual({
       role: "system",
-      content: softStopLayer.content
+      content: rootAgentsLayer!.content
     })
     expect(normalized[2]).toEqual({
+      role: "system",
+      content: softStopLayer.content
+    })
+    expect(normalized[3]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Wrap up now." }]
     })
