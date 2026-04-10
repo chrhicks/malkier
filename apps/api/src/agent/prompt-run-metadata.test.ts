@@ -36,4 +36,29 @@ describe("prompt run metadata", () => {
     expect(metadata.layers.map((layer) => layer.order)).toEqual([0, 1, 2, 3])
     expect(metadata.layers.every((layer) => typeof layer.sha256 === "string" && layer.sha256.length > 0)).toBe(true)
   })
+
+  test("includes subagent layers in persisted run metadata", () => {
+    const assembled = assemblePrompt({
+      messages: [],
+      subagentContext: {
+        role: "code-reviewer",
+        brief: "Inspect the latest patch for regressions.",
+        outputContract: "Return summary and findings.",
+        inheritedMode: "review",
+        inheritedSkills: ["coding-standards"]
+      }
+    })
+
+    const metadata = createPromptRunMetadata(assembled)
+
+    expect(metadata.resolvedMode).toBe("review")
+    expect(metadata.selectedSkills).toEqual(["coding-standards"])
+    expect(metadata.layers.at(-1)).toEqual({
+      order: 4,
+      id: metadata.layers[4]!.id,
+      kind: "subagent",
+      source: "subagent:code-reviewer",
+      sha256: metadata.layers[4]!.sha256
+    })
+  })
 })

@@ -378,6 +378,68 @@ describe("collectPrompt", () => {
     expect(assembled.layers[1]).toEqual(skillLayers[0])
   })
 
+  test("assemblePrompt builds bounded subagent prompts with inherited mode and skills", () => {
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Parent transcript should not be replayed.",
+          sequence: 1
+        })
+      ],
+      subagentContext: {
+        role: "code-reviewer",
+        brief: "Inspect src/foo.ts for regressions around session replay.",
+        outputContract: "Return summary, findings, relevant file references, and open uncertainty.",
+        inheritedMode: "review",
+        inheritedSkills: ["coding-standards"]
+      }
+    })
+    const normalized = normalizePrompt(Prompt.make(assembled.prompt))
+    const subagentLayer = assembled.layers[4]!
+
+    expect(assembled.resolvedMode).toBe("review")
+    expect(assembled.selectedSkills).toEqual(["coding-standards"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "skill", "subagent"])
+    expect(subagentLayer.source).toBe("subagent:code-reviewer")
+    expect(subagentLayer.content).toContain("You are acting as a bounded subagent for the parent agent.")
+    expect(normalized).toHaveLength(6)
+    expect(normalized[5]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Delegated task brief from the parent agent:\n\nInspect src/foo.ts for regressions around session replay." }]
+    })
+    expect(JSON.stringify(normalized)).not.toContain("Parent transcript should not be replayed.")
+  })
+
+  test("explicit mode and selected skills override inherited subagent context", () => {
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Parent transcript should still not be replayed.",
+          sequence: 1
+        })
+      ],
+      explicitMode: "default",
+      selectedSkills: ["malkier-ui"],
+      subagentContext: {
+        role: "ui-explorer",
+        brief: "Inspect the Solid layout and summarize responsive issues.",
+        outputContract: "Return summary and relevant file references.",
+        inheritedMode: "review",
+        inheritedSkills: ["coding-standards"]
+      }
+    }, {
+      rootAgentsLayer: null
+    })
+
+    expect(assembled.resolvedMode).toBe("default")
+    expect(assembled.selectedSkills).toEqual(["malkier-ui"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "skill", "subagent"])
+    expect(assembled.layers[1]?.source).toBe(".agents/skills/malkier-ui/SKILL.md")
+    expect(assembled.layers[2]?.source).toBe("subagent:ui-explorer")
+  })
+
   test("assemblePrompt appends the soft-stop layer before conversation history when requested", () => {
     const rootAgentsLayer = loadRootAgentsPromptLayer()
 

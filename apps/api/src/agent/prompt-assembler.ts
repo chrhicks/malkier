@@ -12,8 +12,11 @@ import { workspaceRoot } from "../workspace-root"
 export type PromptLayerKind = "base" | "runtime" | "repo" | "mode" | "skill" | "subagent" | "soft-stop"
 
 export type SubagentContext = {
-  readonly source: string
-  readonly content: string
+  readonly role: string
+  readonly brief: string
+  readonly outputContract: string
+  readonly inheritedMode?: AgentMode | null
+  readonly inheritedSkills?: ReadonlyArray<string>
 }
 
 export type PromptLayer = {
@@ -116,6 +119,8 @@ const skillPromptFile = (skillName: string) => resolve(skillsRoot, skillName, "S
 
 const skillPromptSource = (skillName: string) => `.agents/skills/${skillName}/SKILL.md`
 
+const subagentPromptSource = (role: string) => `subagent:${role}`
+
 export const loadSelectedSkillPromptLayers = (
   selectedSkills: ReadonlyArray<string>
 ): ReadonlyArray<PromptLayer> => selectedSkills.flatMap((skillName) => {
@@ -127,6 +132,63 @@ export const loadSelectedSkillPromptLayers = (
 
   return [makePromptLayer("skill", skillPromptSource(skillName), content)]
 })
+
+const resolveMode = ({
+  messages,
+  explicitMode,
+  subagentContext
+}: Pick<AssemblePromptInput, "messages" | "explicitMode" | "subagentContext">): AgentMode => {
+  if (explicitMode !== undefined) {
+    return explicitMode
+  }
+
+  if (subagentContext != null) {
+    return subagentContext.inheritedMode ?? "default"
+  }
+
+  return inferModeFromMessages(messages)
+}
+
+const resolveSelectedSkills = ({
+  selectedSkills,
+  subagentContext
+}: Pick<AssemblePromptInput, "selectedSkills" | "subagentContext">): ReadonlyArray<string> => {
+  if (selectedSkills !== undefined) {
+    return [...selectedSkills]
+  }
+
+  return [...(subagentContext?.inheritedSkills ?? [])]
+}
+
+const makeSubagentOverlayContent = (subagentContext: SubagentContext) => [
+  "## Subagent Delegation",
+  "",
+  "- You are acting as a bounded subagent for the parent agent.",
+  `- Your delegated role is: ${subagentContext.role}.`,
+  "- Work only from the delegated brief provided below.",
+  "- Do not assume access to the full parent transcript.",
+  "- Return a compact artifact to the parent instead of a final user-facing answer.",
+  "",
+  "Required output contract:",
+  subagentContext.outputContract
+].join("\n")
+
+const makeSubagentPromptLayer = (subagentContext: SubagentContext): PromptLayer =>
+  makePromptLayer("subagent", subagentPromptSource(subagentContext.role), makeSubagentOverlayContent(subagentContext))
+
+const makeSubagentBriefPrompt = (subagentContext: SubagentContext): Prompt.Prompt =>
+  Prompt.fromMessages([
+    Prompt.makeMessage("user", {
+      content: [
+        Prompt.makePart("text", {
+          text: [
+            "Delegated task brief from the parent agent:",
+            subagentContext.brief
+          ].join("\n\n")
+        })
+      ]
+    })
+  ])
 
 const inferModeFromMessages = (messages: ReadonlyArray<SessionMessageWithMetadata>): AgentMode => {
   const latestUserMessage = [...messages].reverse().find((message) => message.role === "user")
@@ -198,10 +260,11 @@ export const assemblePrompt = ({
   messages,
   explicitMode,
   selectedSkills,
-  nearSoftStop
+  nearSoftStop,
+  subagentContext
 }: AssemblePromptInput, options: AssemblePromptOptions = {}): AssembledPrompt => {
-  const resolvedMode = explicitMode ?? inferModeFromMessages(messages)
-  const resolvedSkills = [...(selectedSkills ?? [])]
+  const resolvedMode = resolveMode({ messages, explicitMode, subagentContext })
+  const resolvedSkills = resolveSelectedSkills({ selectedSkills, subagentContext })
   const rootAgentsLayer = options.rootAgentsLayer === undefined
     ? loadRootAgentsPromptLayer()
     : options.rootAgentsLayer
@@ -219,13 +282,23 @@ export const assemblePrompt = ({
 
   layers.push(...loadSelectedSkillPromptLayers(resolvedSkills))
 
+  if (subagentContext != null) {
+    layers.push(makeSubagentPromptLayer(subagentContext))
+  }
+
   if (nearSoftStop === true) {
     layers.push(makePromptLayer("soft-stop", softStopPromptSource, softStopPrompt))
   }
 
+  // Subagent runs consume a bounded delegated brief instead of replaying the
+  // full parent transcript. The parent must summarize any relevant context.
+  const conversationPrompt = subagentContext == null
+    ? collectPrompt(messages)
+    : makeSubagentBriefPrompt(subagentContext)
+
   const prompt = Prompt.merge(
     layers.reduce((currentPrompt, layer) => appendSystemLayer(currentPrompt, layer), Prompt.empty),
-    collectPrompt(messages)
+    conversationPrompt
   )
 
   return {
