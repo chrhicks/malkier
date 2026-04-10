@@ -1,9 +1,11 @@
 import * as z from 'zod'
+import { agentModeValues } from './agent/agent-mode'
 
 export const PostAgentMessageRequest = z.object({
   userId: z.uuid(),
   sessionId: z.uuid().optional(),
   message: z.string().trim().min(1),
+  mode: z.enum(agentModeValues).optional(),
 })
 
 

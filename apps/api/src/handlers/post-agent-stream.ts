@@ -422,7 +422,8 @@ export const postAgentStream = (request: Request) =>
         "user.id": parsed.userId,
         "session.id": session.sessionId,
         "session.is_new": session.isNew,
-        "message.role": 'user'
+        "message.role": 'user',
+        "agent.mode.requested": parsed.mode
       })
 
       const nextSequence = yield* SessionService.nextMessageSequence(session.sessionId)
@@ -440,8 +441,12 @@ export const postAgentStream = (request: Request) =>
         sessionId: session.sessionId
       })
       const assembledPrompt = yield* PromptAssembler.assemble({
-        messages: loadedSession.messages
+        messages: loadedSession.messages,
+        explicitMode: parsed.mode
       }).pipe(Effect.provide(PromptAssembler.Default))
+      yield* annotateCurrentSpanAttributes({
+        "agent.mode.resolved": assembledPrompt.resolvedMode
+      })
       const parentSpan = yield* OtelTracer.currentOtelSpan.pipe(
         Effect.map((span) => span.spanContext()),
         Effect.option

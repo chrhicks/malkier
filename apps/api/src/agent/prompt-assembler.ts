@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { Prompt, Response as EffectResponse } from "@effect/ai"
 import { Effect } from "effect"
+import type { AgentMode } from "./agent-mode"
 import { malkierBaseSystemPrompt, malkierBaseSystemPromptSource } from "./prompts/base-system-prompt"
+import { reviewModePrompt, reviewModePromptSource } from "./prompts/review-mode-prompt"
 import type { SessionMessageWithMetadata } from "../service/session.service"
 import { workspaceRoot } from "../workspace-root"
 
 export type PromptLayerKind = "base" | "runtime" | "repo" | "mode" | "skill" | "subagent" | "soft-stop"
-
-export type AgentMode = "default" | "review"
 
 export type SubagentContext = {
   readonly source: string
@@ -48,6 +48,8 @@ const rootAgentsPromptFile = resolve(workspaceRoot, "AGENTS.md")
 
 export const rootAgentsPromptSource = "AGENTS.md"
 export const softStopPromptSource = "@malkier/agent/soft-stop"
+
+const reviewModePattern = /\breview\b/i
 
 const softStopPrompt = [
   "You are approaching the maximum number of model rounds for this request.",
@@ -107,6 +109,16 @@ export const loadRootAgentsPromptLayer = (filePath = rootAgentsPromptFile): Prom
   }
 
   return makePromptLayer("repo", rootAgentsPromptSource, content)
+}
+
+const inferModeFromMessages = (messages: ReadonlyArray<SessionMessageWithMetadata>): AgentMode => {
+  const latestUserMessage = [...messages].reverse().find((message) => message.role === "user")
+
+  if (latestUserMessage == null) {
+    return "default"
+  }
+
+  return reviewModePattern.test(latestUserMessage.content) ? "review" : "default"
 }
 
 export const collectPrompt = (messages: ReadonlyArray<SessionMessageWithMetadata>): Prompt.Prompt => {
@@ -171,7 +183,7 @@ export const assemblePrompt = ({
   selectedSkills,
   nearSoftStop
 }: AssemblePromptInput, options: AssemblePromptOptions = {}): AssembledPrompt => {
-  const resolvedMode = explicitMode ?? "default"
+  const resolvedMode = explicitMode ?? inferModeFromMessages(messages)
   const resolvedSkills = [...(selectedSkills ?? [])]
   const rootAgentsLayer = options.rootAgentsLayer === undefined
     ? loadRootAgentsPromptLayer()
@@ -182,6 +194,10 @@ export const assemblePrompt = ({
 
   if (rootAgentsLayer !== null) {
     layers.push(rootAgentsLayer)
+  }
+
+  if (resolvedMode === "review") {
+    layers.push(makePromptLayer("mode", reviewModePromptSource, reviewModePrompt))
   }
 
   if (nearSoftStop === true) {

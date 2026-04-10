@@ -9,6 +9,7 @@ import {
   softStopPromptSource
 } from "../agent/prompt-assembler"
 import { malkierBaseSystemPrompt, malkierBaseSystemPromptSource } from "../agent/prompts/base-system-prompt"
+import { reviewModePrompt, reviewModePromptSource } from "../agent/prompts/review-mode-prompt"
 import type { SessionMessageWithMetadata } from "../service/session.service"
 
 const makeSessionMessage = (
@@ -272,6 +273,55 @@ describe("collectPrompt", () => {
     })
   })
 
+  test("assemblePrompt infers review mode from the latest user review request", () => {
+    const rootAgentsLayer = loadRootAgentsPromptLayer()
+
+    expect(rootAgentsLayer).not.toBeNull()
+
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Please review this patch for regressions.",
+          sequence: 1
+        })
+      ]
+    })
+    const normalized = normalizePrompt(Prompt.make(assembled.prompt))
+    const reviewLayer = assembled.layers[2]!
+
+    expect(assembled.resolvedMode).toBe("review")
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode"])
+    expect(reviewLayer.source).toBe(reviewModePromptSource)
+    expect(reviewLayer.content).toBe(reviewModePrompt)
+    expect(normalized[2]).toEqual({
+      role: "system",
+      content: reviewModePrompt
+    })
+    expect(normalized[3]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Please review this patch for regressions." }]
+    })
+  })
+
+  test("explicit default mode overrides review inference", () => {
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Please review this patch for regressions.",
+          sequence: 1
+        })
+      ],
+      explicitMode: "default"
+    }, {
+      rootAgentsLayer: null
+    })
+
+    expect(assembled.resolvedMode).toBe("default")
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base"])
+  })
+
   test("assemblePrompt appends the soft-stop layer before conversation history when requested", () => {
     const rootAgentsLayer = loadRootAgentsPromptLayer()
 
@@ -290,13 +340,15 @@ describe("collectPrompt", () => {
       nearSoftStop: true
     })
     const normalized = normalizePrompt(Prompt.make(assembled.prompt))
-    const softStopLayer = assembled.layers[2]!
+    const reviewLayer = assembled.layers[2]!
+    const softStopLayer = assembled.layers[3]!
 
     expect(assembled.resolvedMode).toBe("review")
     expect(assembled.selectedSkills).toEqual(["coding-standards"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "soft-stop"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "soft-stop"])
     expect(assembled.layers[1]).toEqual(rootAgentsLayer!)
     expect(assembled.layers[1]?.source).toBe(rootAgentsPromptSource)
+    expect(reviewLayer.source).toBe(reviewModePromptSource)
     expect(softStopLayer.source).toBe(softStopPromptSource)
     expect(softStopLayer.sha256).toBe(
       createHash("sha256")
@@ -314,9 +366,13 @@ describe("collectPrompt", () => {
     })
     expect(normalized[2]).toEqual({
       role: "system",
-      content: softStopLayer.content
+      content: reviewModePrompt
     })
     expect(normalized[3]).toEqual({
+      role: "system",
+      content: softStopLayer.content
+    })
+    expect(normalized[4]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Wrap up now." }]
     })
