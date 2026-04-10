@@ -6,6 +6,7 @@ export const PostAgentMessageRequest = z.object({
   sessionId: z.uuid().optional(),
   message: z.string().trim().min(1),
   mode: z.enum(agentModeValues).optional(),
+  selectedSkills: z.array(z.string().trim().min(1)).optional(),
 })
 
 

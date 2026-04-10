@@ -5,6 +5,7 @@ import {
   assemblePrompt,
   collectPrompt,
   loadRootAgentsPromptLayer,
+  loadSelectedSkillPromptLayers,
   rootAgentsPromptSource,
   softStopPromptSource
 } from "../agent/prompt-assembler"
@@ -322,6 +323,61 @@ describe("collectPrompt", () => {
     expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base"])
   })
 
+  test("assemblePrompt loads selected skills in request order after mode overlays", () => {
+    const rootAgentsLayer = loadRootAgentsPromptLayer()
+    const skillLayers = loadSelectedSkillPromptLayers(["coding-standards", "malkier-ui"])
+
+    expect(rootAgentsLayer).not.toBeNull()
+    expect(skillLayers).toHaveLength(2)
+
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Please review this frontend work.",
+          sequence: 1
+        })
+      ],
+      selectedSkills: ["coding-standards", "malkier-ui"]
+    })
+    const normalized = normalizePrompt(Prompt.make(assembled.prompt))
+
+    expect(assembled.resolvedMode).toBe("review")
+    expect(assembled.selectedSkills).toEqual(["coding-standards", "malkier-ui"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "skill", "skill"])
+    expect(assembled.layers[3]).toEqual(skillLayers[0])
+    expect(assembled.layers[4]).toEqual(skillLayers[1])
+    expect(normalized[3]).toEqual({
+      role: "system",
+      content: skillLayers[0]!.content
+    })
+    expect(normalized[4]).toEqual({
+      role: "system",
+      content: skillLayers[1]!.content
+    })
+  })
+
+  test("assemblePrompt skips missing selected skills without affecting loaded skill order", () => {
+    const skillLayers = loadSelectedSkillPromptLayers(["missing-skill", "coding-standards"])
+    const assembled = assemblePrompt({
+      messages: [
+        makeSessionMessage({
+          role: "user",
+          content: "Use the coding standards skill.",
+          sequence: 1
+        })
+      ],
+      selectedSkills: ["missing-skill", "coding-standards"]
+    }, {
+      rootAgentsLayer: null
+    })
+
+    expect(skillLayers).toHaveLength(1)
+    expect(assembled.selectedSkills).toEqual(["missing-skill", "coding-standards"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "skill"])
+    expect(assembled.layers[1]).toEqual(skillLayers[0])
+  })
+
   test("assemblePrompt appends the soft-stop layer before conversation history when requested", () => {
     const rootAgentsLayer = loadRootAgentsPromptLayer()
 
@@ -341,14 +397,16 @@ describe("collectPrompt", () => {
     })
     const normalized = normalizePrompt(Prompt.make(assembled.prompt))
     const reviewLayer = assembled.layers[2]!
-    const softStopLayer = assembled.layers[3]!
+    const skillLayer = assembled.layers[3]!
+    const softStopLayer = assembled.layers[4]!
 
     expect(assembled.resolvedMode).toBe("review")
     expect(assembled.selectedSkills).toEqual(["coding-standards"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "soft-stop"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "skill", "soft-stop"])
     expect(assembled.layers[1]).toEqual(rootAgentsLayer!)
     expect(assembled.layers[1]?.source).toBe(rootAgentsPromptSource)
     expect(reviewLayer.source).toBe(reviewModePromptSource)
+    expect(skillLayer.kind).toBe("skill")
     expect(softStopLayer.source).toBe(softStopPromptSource)
     expect(softStopLayer.sha256).toBe(
       createHash("sha256")
@@ -370,9 +428,13 @@ describe("collectPrompt", () => {
     })
     expect(normalized[3]).toEqual({
       role: "system",
-      content: softStopLayer.content
+      content: skillLayer.content
     })
     expect(normalized[4]).toEqual({
+      role: "system",
+      content: softStopLayer.content
+    })
+    expect(normalized[5]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Wrap up now." }]
     })

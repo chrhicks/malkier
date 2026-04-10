@@ -45,6 +45,7 @@ type AssemblePromptOptions = {
 }
 
 const rootAgentsPromptFile = resolve(workspaceRoot, "AGENTS.md")
+const skillsRoot = resolve(workspaceRoot, ".agents/skills")
 
 export const rootAgentsPromptSource = "AGENTS.md"
 export const softStopPromptSource = "@malkier/agent/soft-stop"
@@ -110,6 +111,22 @@ export const loadRootAgentsPromptLayer = (filePath = rootAgentsPromptFile): Prom
 
   return makePromptLayer("repo", rootAgentsPromptSource, content)
 }
+
+const skillPromptFile = (skillName: string) => resolve(skillsRoot, skillName, "SKILL.md")
+
+const skillPromptSource = (skillName: string) => `.agents/skills/${skillName}/SKILL.md`
+
+export const loadSelectedSkillPromptLayers = (
+  selectedSkills: ReadonlyArray<string>
+): ReadonlyArray<PromptLayer> => selectedSkills.flatMap((skillName) => {
+  const content = readPromptFileIfPresent(skillPromptFile(skillName))
+
+  if (content == null || content.length === 0) {
+    return []
+  }
+
+  return [makePromptLayer("skill", skillPromptSource(skillName), content)]
+})
 
 const inferModeFromMessages = (messages: ReadonlyArray<SessionMessageWithMetadata>): AgentMode => {
   const latestUserMessage = [...messages].reverse().find((message) => message.role === "user")
@@ -199,6 +216,8 @@ export const assemblePrompt = ({
   if (resolvedMode === "review") {
     layers.push(makePromptLayer("mode", reviewModePromptSource, reviewModePrompt))
   }
+
+  layers.push(...loadSelectedSkillPromptLayers(resolvedSkills))
 
   if (nearSoftStop === true) {
     layers.push(makePromptLayer("soft-stop", softStopPromptSource, softStopPrompt))
