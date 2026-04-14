@@ -50,6 +50,7 @@ describe("getSession", () => {
     const latestRun: PromptRunMetadata = {
       resolvedMode: "review",
       selectedSkills: ["coding-standards"],
+      toolLoadedSkills: ["coding-standards"],
       rootAgentsLoaded: true,
       layers: [
         {

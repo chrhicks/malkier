@@ -16,6 +16,7 @@ export type PersistedPromptLayer = Schema.Schema.Type<typeof PersistedPromptLaye
 export const PromptRunMetadata = Schema.Struct({
   resolvedMode: Schema.Literal(...agentModeValues),
   selectedSkills: Schema.Array(Schema.String),
+  toolLoadedSkills: Schema.Array(Schema.String),
   rootAgentsLoaded: Schema.Boolean,
   layers: Schema.Array(PersistedPromptLayer)
 })
@@ -25,6 +26,7 @@ export type PromptRunMetadata = Schema.Schema.Type<typeof PromptRunMetadata>
 export const createPromptRunMetadata = (assembledPrompt: AssembledPrompt): PromptRunMetadata => ({
   resolvedMode: assembledPrompt.resolvedMode,
   selectedSkills: [...assembledPrompt.selectedSkills],
+  toolLoadedSkills: [],
   rootAgentsLoaded: assembledPrompt.layers.some(
     (layer) => layer.kind === "repo" && layer.source === rootAgentsPromptSource
   ),
@@ -37,8 +39,40 @@ export const createPromptRunMetadata = (assembledPrompt: AssembledPrompt): Promp
   }))
 })
 
+export const appendToolLoadedSkill = (
+  metadata: PromptRunMetadata,
+  skillName: string
+): PromptRunMetadata => {
+  if (metadata.toolLoadedSkills.includes(skillName)) {
+    return metadata
+  }
+
+  return {
+    ...metadata,
+    toolLoadedSkills: [...metadata.toolLoadedSkills, skillName]
+  }
+}
+
+const withPromptRunMetadataDefaults = (metadata: unknown): unknown => {
+  if (typeof metadata !== "object" || metadata === null) {
+    return metadata
+  }
+
+  if ("toolLoadedSkills" in metadata) {
+    return metadata
+  }
+
+  return {
+    ...metadata,
+    toolLoadedSkills: []
+  }
+}
+
 export const decodePromptRunMetadata = (metadata: string) =>
   Effect.try({
     try: () => JSON.parse(metadata),
     catch: (cause) => new Error(`Invalid prompt run metadata JSON: ${String(cause)}`)
-  }).pipe(Effect.flatMap(Schema.decodeUnknown(PromptRunMetadata)))
+  }).pipe(
+    Effect.map(withPromptRunMetadataDefaults),
+    Effect.flatMap(Schema.decodeUnknown(PromptRunMetadata))
+  )

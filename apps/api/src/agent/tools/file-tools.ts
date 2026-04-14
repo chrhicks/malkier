@@ -1285,7 +1285,7 @@ export const GlobFilesTool = Tool.make("glob_files", {
 })
 
 export const SearchCodeTool = Tool.make("search_code", {
-  description: "Search text files in the workspace for matching lines.",
+  description: "Search text files in the workspace for lines containing a literal substring query. This tool does not support regex syntax.",
   parameters: SearchCodeParameters,
   success: SearchCodeSuccessSchema,
   failure: FileToolFailureSchema,

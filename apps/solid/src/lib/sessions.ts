@@ -16,6 +16,7 @@ export interface PromptRunLayer {
 export interface PromptRunMetadata {
   readonly resolvedMode: "default" | "review"
   readonly selectedSkills: string[]
+  readonly toolLoadedSkills: string[]
   readonly rootAgentsLoaded: boolean
   readonly layers: PromptRunLayer[]
 }

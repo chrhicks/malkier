@@ -283,6 +283,7 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       metadata: PromptRunMetadata
     }) {
       const now = new Date()
+      const runId = crypto.randomUUID()
 
       yield* withDbSpan(
         "db.session_runs.insert",
@@ -296,12 +297,42 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
         Effect.tryPromise({
           try: () =>
             db.insert(sessionRuns).values({
-              id: crypto.randomUUID(),
+              id: runId,
               sessionId,
               metadata: JSON.stringify(metadata),
               createdAt: now
             }),
           catch: (error) => new InternalError({ message: `Failed to insert session run metadata: ${String(error)}` })
+        })
+      )
+
+      return runId
+    })
+
+    const updateSessionRun = Effect.fn("SessionService.updateSessionRun")(function* ({
+      runId,
+      metadata
+    }: {
+      runId: string,
+      metadata: PromptRunMetadata
+    }) {
+      yield* withDbSpan(
+        "db.session_runs.update",
+        {
+          "db.operation": "update",
+          "db.table": "session_runs",
+          "session.run.id": runId,
+          "agent.mode.resolved": metadata.resolvedMode,
+          "agent.skills.tool_loaded": metadata.toolLoadedSkills.join(",")
+        },
+        Effect.tryPromise({
+          try: () =>
+            db.update(sessionRuns)
+              .set({
+                metadata: JSON.stringify(metadata)
+              })
+              .where(eq(sessionRuns.id, runId)),
+          catch: (error) => new InternalError({ message: `Failed to update session run metadata: ${String(error)}` })
         })
       )
     })
@@ -401,6 +432,7 @@ export class SessionService extends Effect.Service<SessionService>()("SessionSer
       nextMessageSequence,
       insertSessionMessage,
       insertSessionRun,
+      updateSessionRun,
       listSessions,
     }
   })

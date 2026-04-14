@@ -10,7 +10,7 @@ import { SessionService } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import { getAgentTools } from "../agent/tools"
 import { PromptAssembler } from "../agent/prompt-assembler"
-import { createPromptRunMetadata } from "../agent/prompt-run-metadata"
+import { appendToolLoadedSkill, createPromptRunMetadata, type PromptRunMetadata } from "../agent/prompt-run-metadata"
 import { HoneycombObservabilityLive } from "../observability/honeycomb"
 import withHttpObservability from "../server/http-observability"
 
@@ -75,6 +75,18 @@ const formatResult = (result: unknown): string => {
   }
 }
 
+const getToolLoadedSkillName = (eventResult: unknown): string | null => {
+  if (typeof eventResult !== "object" || eventResult === null) {
+    return null
+  }
+
+  if (!("name" in eventResult) || typeof eventResult.name !== "string") {
+    return null
+  }
+
+  return eventResult.name
+}
+
 const withEventSpan = <A, E, R>(
   name: string,
   attributes: Record<string, string | number | boolean | undefined>,
@@ -92,7 +104,9 @@ const makeStreamResponse = ({
   promptMessageCount,
   nextSequence,
   sessionService,
-  parentSpanContext
+  parentSpanContext,
+  sessionRunId,
+  initialPromptRunMetadata
 }: {
   userId: string
   sessionId: string
@@ -101,12 +115,15 @@ const makeStreamResponse = ({
   nextSequence: number
   sessionService: SessionService
   parentSpanContext?: SpanContext
+  sessionRunId: string
+  initialPromptRunMetadata: PromptRunMetadata
 }) => {
   let fiber: Fiber.RuntimeFiber<void, never> | null = null
   let sequence = nextSequence
   let agentText = ''
   let cancelledByClient = false
   let streamClosed = false
+  let promptRunMetadata = initialPromptRunMetadata
 
   const assistantOutputMetadata = (reason: Exclude<StreamStopReason, 'done'>) => ({
     kind: 'assistant-output' as const,
@@ -230,6 +247,29 @@ const makeStreamResponse = ({
             }
 
             if (event.type === 'tool-result') {
+              const persistUpdatedRunMetadata = event.name === 'load_skill' && !event.isFailure
+                ? Effect.gen(function* () {
+                    const loadedSkillName = getToolLoadedSkillName(event.result)
+
+                    if (loadedSkillName == null) {
+                      return
+                    }
+
+                    const nextRunMetadata = appendToolLoadedSkill(promptRunMetadata, loadedSkillName)
+
+                    if (nextRunMetadata === promptRunMetadata) {
+                      return
+                    }
+
+                    promptRunMetadata = nextRunMetadata
+
+                    yield* sessionService.updateSessionRun({
+                      runId: sessionRunId,
+                      metadata: promptRunMetadata
+                    })
+                  })
+                : Effect.void
+
               return withEventSpan(
                 'agent.tool-result',
                 {
@@ -253,6 +293,7 @@ const makeStreamResponse = ({
                     isFailure: event.isFailure
                   }
                 }).pipe(
+                  Effect.zipRight(persistUpdatedRunMetadata),
                   Effect.zipRight(Effect.sync(() => send('agent-event', event)))
                 )
               )
@@ -448,7 +489,7 @@ export const postAgentStream = (request: Request) =>
         selectedSkills: parsed.selectedSkills
       }).pipe(Effect.provide(PromptAssembler.Default))
       const promptRunMetadata = createPromptRunMetadata(assembledPrompt)
-      yield* SessionService.insertSessionRun({
+      const sessionRunId = yield* SessionService.insertSessionRun({
         sessionId: session.sessionId,
         metadata: promptRunMetadata
       })
@@ -470,6 +511,8 @@ export const postAgentStream = (request: Request) =>
         userId: parsed.userId,
         sessionId: session.sessionId,
         nextSequence: nextSequence + 1,
+        sessionRunId,
+        initialPromptRunMetadata: promptRunMetadata,
         parentSpanContext: Option.match(parentSpan, {
           onNone: () => undefined,
           onSome: (spanContext) => spanContext
