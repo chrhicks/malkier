@@ -1,8 +1,21 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { appendToolLoadedSkill, createPromptRunMetadata } from "./prompt-run-metadata"
+import {
+  appendToolLoadedSkill,
+  createPromptRunLlmSettings,
+  createPromptRunMetadata
+} from "./prompt-run-metadata"
 import { decodePromptRunMetadata } from "./prompt-run-metadata"
 import { assemblePrompt } from "./prompt-assembler"
+
+const llmSettings = createPromptRunLlmSettings({
+  model: "gpt-5.3-codex",
+  apiUrl: "https://opencode.ai/zen/v1",
+  temperature: 0.2,
+  reasoningEffort: "high",
+  verbosity: "low",
+  maxCompletionTokens: 4096
+})
 
 describe("prompt run metadata", () => {
   test("builds compact persisted metadata for base, repo, runtime, mode, and skill layers", () => {
@@ -12,11 +25,12 @@ describe("prompt run metadata", () => {
       selectedSkills: ["coding-standards"]
     })
 
-    const metadata = createPromptRunMetadata(assembled)
+    const metadata = createPromptRunMetadata(assembled, llmSettings)
 
     expect(metadata.resolvedMode).toBe("review")
     expect(metadata.selectedSkills).toEqual(["coding-standards"])
     expect(metadata.toolLoadedSkills).toEqual([])
+    expect(metadata.llmSettings).toEqual(llmSettings)
     expect(metadata.rootAgentsLoaded).toBe(true)
     expect(metadata.layers.map((layer) => ({ kind: layer.kind, source: layer.source }))).toEqual([
       {
@@ -56,11 +70,12 @@ describe("prompt run metadata", () => {
       }
     })
 
-    const metadata = createPromptRunMetadata(assembled)
+    const metadata = createPromptRunMetadata(assembled, llmSettings)
 
     expect(metadata.resolvedMode).toBe("review")
     expect(metadata.selectedSkills).toEqual(["coding-standards"])
     expect(metadata.toolLoadedSkills).toEqual([])
+    expect(metadata.llmSettings).toEqual(llmSettings)
     expect(metadata.layers.at(-1)).toEqual({
       order: 5,
       id: metadata.layers[5]!.id,
@@ -101,6 +116,7 @@ describe("prompt run metadata", () => {
     )
 
     expect(decoded.toolLoadedSkills).toEqual([])
+    expect(decoded.llmSettings).toBeNull()
     expect(decoded.rootAgentsLoaded).toBe(true)
   })
 })

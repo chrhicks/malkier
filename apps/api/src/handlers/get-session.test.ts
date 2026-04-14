@@ -51,6 +51,14 @@ describe("getSession", () => {
       resolvedMode: "review",
       selectedSkills: ["coding-standards"],
       toolLoadedSkills: ["coding-standards"],
+      llmSettings: {
+        model: "gpt-5.3-codex",
+        apiUrl: "https://opencode.ai/zen/v1",
+        temperature: 0.2,
+        reasoningEffort: "high",
+        verbosity: "low",
+        maxCompletionTokens: 4096
+      },
       rootAgentsLoaded: true,
       layers: [
         {

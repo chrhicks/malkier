@@ -1,6 +1,6 @@
-import { Agent, layerConfig } from "@malkier/agent"
+import { Agent, agentRuntimeConfig, agentRuntimeConfigOptions, layerConfig } from "@malkier/agent"
 import { Tracer as OtelTracer } from "@effect/opentelemetry"
-import { Cause, Config, Effect, Fiber, Layer, Option, Stream } from "effect"
+import { Cause, Effect, Fiber, Layer, Option, Stream } from "effect"
 import type { SpanContext } from "@opentelemetry/api"
 import { PostAgentMessageRequest } from "../schema"
 import { BadRequestError, InternalError, SessionOwnershipError, StreamTimeoutError } from "../errors"
@@ -10,23 +10,25 @@ import { SessionService } from "../service/session.service"
 import { Prompt } from "@effect/ai"
 import { getAgentTools } from "../agent/tools"
 import { PromptAssembler } from "../agent/prompt-assembler"
-import { appendToolLoadedSkill, createPromptRunMetadata, type PromptRunMetadata } from "../agent/prompt-run-metadata"
+import {
+  appendToolLoadedSkill,
+  createPromptRunLlmSettings,
+  createPromptRunMetadata,
+  type PromptRunMetadata
+} from "../agent/prompt-run-metadata"
 import { HoneycombObservabilityLive } from "../observability/honeycomb"
 import withHttpObservability from "../server/http-observability"
 
 const encoder = new TextEncoder()
 const requestStreamTimeoutDuration = '5 minutes'
 const requestStreamTimeoutMessage = `Request stream timeout after ${requestStreamTimeoutDuration}`
+const defaultAgentModel = "gpt-5.3-codex"
+const defaultAgentApiUrl = "https://opencode.ai/zen/v1"
 
-const agentLayer = layerConfig({
-  model: Config.string("MALKIER_AGENT_MODEL").pipe(
-    Config.withDefault("gpt-5.3-codex")
-  ),
-  apiUrl: Config.string("MALKIER_AGENT_API_URL").pipe(
-    Config.withDefault("https://opencode.ai/zen/v1")
-  ),
-  apiKey: Config.redacted("OPENCODE_ZEN_API_KEY")
-})
+const agentLayer = layerConfig(agentRuntimeConfigOptions({
+  defaultModel: defaultAgentModel,
+  defaultApiUrl: defaultAgentApiUrl
+}))
 
 const sseFrame = (event: string, data: unknown): Uint8Array =>
   encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
@@ -483,12 +485,19 @@ export const postAgentStream = (request: Request) =>
         userId: parsed.userId,
         sessionId: session.sessionId
       })
+      const runtimeConfig = yield* agentRuntimeConfig({
+        defaultModel: defaultAgentModel,
+        defaultApiUrl: defaultAgentApiUrl
+      })
       const assembledPrompt = yield* PromptAssembler.assemble({
         messages: loadedSession.messages,
         explicitMode: parsed.mode,
         selectedSkills: parsed.selectedSkills
       }).pipe(Effect.provide(PromptAssembler.Default))
-      const promptRunMetadata = createPromptRunMetadata(assembledPrompt)
+      const promptRunMetadata = createPromptRunMetadata(
+        assembledPrompt,
+        createPromptRunLlmSettings(runtimeConfig)
+      )
       const sessionRunId = yield* SessionService.insertSessionRun({
         sessionId: session.sessionId,
         metadata: promptRunMetadata

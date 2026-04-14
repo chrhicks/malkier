@@ -13,10 +13,20 @@ export interface PromptRunLayer {
   readonly sha256: string
 }
 
+export interface PromptRunLlmSettings {
+  readonly model: string
+  readonly apiUrl: string
+  readonly temperature: number | null
+  readonly reasoningEffort: "none" | "minimal" | "low" | "medium" | "high" | null
+  readonly verbosity: "low" | "medium" | "high" | null
+  readonly maxCompletionTokens: number | null
+}
+
 export interface PromptRunMetadata {
   readonly resolvedMode: "default" | "review"
   readonly selectedSkills: string[]
   readonly toolLoadedSkills: string[]
+  readonly llmSettings: PromptRunLlmSettings | null
   readonly rootAgentsLoaded: boolean
   readonly layers: PromptRunLayer[]
 }

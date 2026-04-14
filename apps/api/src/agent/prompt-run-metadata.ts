@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { reasoningEffortValues, verbosityValues } from "@malkier/agent"
 import type { AssembledPrompt } from "./prompt-assembler"
 import { agentModeValues } from "./agent-mode"
 import { rootAgentsPromptSource } from "./prompt-assembler"
@@ -13,20 +14,59 @@ export const PersistedPromptLayer = Schema.Struct({
 
 export type PersistedPromptLayer = Schema.Schema.Type<typeof PersistedPromptLayer>
 
+export const PromptRunLlmSettings = Schema.Struct({
+  model: Schema.String,
+  apiUrl: Schema.String,
+  temperature: Schema.NullOr(Schema.Number),
+  reasoningEffort: Schema.NullOr(Schema.Literal(...reasoningEffortValues)),
+  verbosity: Schema.NullOr(Schema.Literal(...verbosityValues)),
+  maxCompletionTokens: Schema.NullOr(Schema.Number)
+})
+
+export type PromptRunLlmSettings = Schema.Schema.Type<typeof PromptRunLlmSettings>
+
 export const PromptRunMetadata = Schema.Struct({
   resolvedMode: Schema.Literal(...agentModeValues),
   selectedSkills: Schema.Array(Schema.String),
   toolLoadedSkills: Schema.Array(Schema.String),
+  llmSettings: Schema.NullOr(PromptRunLlmSettings),
   rootAgentsLoaded: Schema.Boolean,
   layers: Schema.Array(PersistedPromptLayer)
 })
 
 export type PromptRunMetadata = Schema.Schema.Type<typeof PromptRunMetadata>
 
-export const createPromptRunMetadata = (assembledPrompt: AssembledPrompt): PromptRunMetadata => ({
+export const createPromptRunLlmSettings = ({
+  model,
+  apiUrl,
+  temperature,
+  reasoningEffort,
+  verbosity,
+  maxCompletionTokens
+}: {
+  readonly model: string
+  readonly apiUrl: string
+  readonly temperature?: number
+  readonly reasoningEffort?: PromptRunLlmSettings["reasoningEffort"] extends infer T ? Exclude<T, null> : never
+  readonly verbosity?: PromptRunLlmSettings["verbosity"] extends infer T ? Exclude<T, null> : never
+  readonly maxCompletionTokens?: number
+}): PromptRunLlmSettings => ({
+  model,
+  apiUrl,
+  temperature: temperature ?? null,
+  reasoningEffort: reasoningEffort ?? null,
+  verbosity: verbosity ?? null,
+  maxCompletionTokens: maxCompletionTokens ?? null
+})
+
+export const createPromptRunMetadata = (
+  assembledPrompt: AssembledPrompt,
+  llmSettings: PromptRunLlmSettings | null = null
+): PromptRunMetadata => ({
   resolvedMode: assembledPrompt.resolvedMode,
   selectedSkills: [...assembledPrompt.selectedSkills],
   toolLoadedSkills: [],
+  llmSettings,
   rootAgentsLoaded: assembledPrompt.layers.some(
     (layer) => layer.kind === "repo" && layer.source === rootAgentsPromptSource
   ),
@@ -58,14 +98,23 @@ const withPromptRunMetadataDefaults = (metadata: unknown): unknown => {
     return metadata
   }
 
-  if ("toolLoadedSkills" in metadata) {
-    return metadata
+  let nextMetadata: Record<string, unknown> = metadata as Record<string, unknown>
+
+  if (!("toolLoadedSkills" in nextMetadata)) {
+    nextMetadata = {
+      ...nextMetadata,
+      toolLoadedSkills: []
+    }
   }
 
-  return {
-    ...metadata,
-    toolLoadedSkills: []
+  if (!("llmSettings" in nextMetadata)) {
+    nextMetadata = {
+      ...nextMetadata,
+      llmSettings: null
+    }
   }
+
+  return nextMetadata
 }
 
 export const decodePromptRunMetadata = (metadata: string) =>
