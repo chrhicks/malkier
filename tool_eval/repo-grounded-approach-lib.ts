@@ -36,6 +36,12 @@ const searchesForWorkspaceRoot = (params: unknown) => {
   return typeof query === "string" && /workspace-root|workspaceRoot/i.test(query)
 }
 
+const mentionsConsumer = (text: string, consumer: string) => {
+  const basename = consumer.split("/").at(-1)
+
+  return text.includes(consumer) || (basename != null && text.includes(basename))
+}
+
 export const gradeRepoGroundedApproachTranscript = ({
   transcript,
   targetPath,
@@ -67,7 +73,7 @@ export const gradeRepoGroundedApproachTranscript = ({
     ),
     makeAssertion(
       "mentions_real_consumers",
-      expectedConsumers.some((consumer) => finalText.includes(consumer)),
+      expectedConsumers.some((consumer) => mentionsConsumer(finalText, consumer)),
       "Answer mentions at least one real current consumer of the abstraction.",
       `Answer does not mention any expected current consumers: ${expectedConsumers.join(", ")}.`
     ),
