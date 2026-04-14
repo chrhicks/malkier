@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import {
   assemblePrompt,
   collectPrompt,
+  loadAvailableSkillSummaryLayer,
   loadRootAgentsPromptLayer,
   loadSelectedSkillPromptLayers,
   rootAgentsPromptSource,
@@ -210,8 +211,10 @@ describe("collectPrompt", () => {
   })
 
   test("assemblePrompt prepends the base system prompt and returns layer metadata", () => {
+    const availableSkillSummaryLayer = loadAvailableSkillSummaryLayer()
     const rootAgentsLayer = loadRootAgentsPromptLayer()
 
+    expect(availableSkillSummaryLayer).not.toBeNull()
     expect(rootAgentsLayer).not.toBeNull()
 
     const assembled = assemblePrompt({
@@ -238,7 +241,8 @@ describe("collectPrompt", () => {
         content: malkierBaseSystemPrompt,
         sha256: createHash("sha256").update(malkierBaseSystemPrompt).digest("hex")
       },
-      rootAgentsLayer!
+      rootAgentsLayer!,
+      availableSkillSummaryLayer!
     ])
     expect(normalized[0]).toEqual({
       role: "system",
@@ -249,6 +253,10 @@ describe("collectPrompt", () => {
       content: rootAgentsLayer!.content
     })
     expect(normalized[2]).toEqual({
+      role: "system",
+      content: availableSkillSummaryLayer!.content
+    })
+    expect(normalized[3]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Please use your tools." }]
     })
@@ -267,8 +275,12 @@ describe("collectPrompt", () => {
       rootAgentsLayer: loadRootAgentsPromptLayer(`/tmp/missing-agents-${crypto.randomUUID()}.md`)
     })
 
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "runtime"])
     expect(normalizePrompt(Prompt.make(assembled.prompt))[1]).toEqual({
+      role: "system",
+      content: loadAvailableSkillSummaryLayer()!.content
+    })
+    expect(normalizePrompt(Prompt.make(assembled.prompt))[2]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Please use your tools." }]
     })
@@ -289,17 +301,17 @@ describe("collectPrompt", () => {
       ]
     })
     const normalized = normalizePrompt(Prompt.make(assembled.prompt))
-    const reviewLayer = assembled.layers[2]!
+    const reviewLayer = assembled.layers[3]!
 
     expect(assembled.resolvedMode).toBe("review")
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "runtime", "mode"])
     expect(reviewLayer.source).toBe(reviewModePromptSource)
     expect(reviewLayer.content).toBe(reviewModePrompt)
-    expect(normalized[2]).toEqual({
+    expect(normalized[3]).toEqual({
       role: "system",
       content: reviewModePrompt
     })
-    expect(normalized[3]).toEqual({
+    expect(normalized[4]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Please review this patch for regressions." }]
     })
@@ -320,7 +332,7 @@ describe("collectPrompt", () => {
     })
 
     expect(assembled.resolvedMode).toBe("default")
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "runtime"])
   })
 
   test("assemblePrompt loads selected skills in request order after mode overlays", () => {
@@ -344,14 +356,14 @@ describe("collectPrompt", () => {
 
     expect(assembled.resolvedMode).toBe("review")
     expect(assembled.selectedSkills).toEqual(["coding-standards", "malkier-ui"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "skill", "skill"])
-    expect(assembled.layers[3]).toEqual(skillLayers[0])
-    expect(assembled.layers[4]).toEqual(skillLayers[1])
-    expect(normalized[3]).toEqual({
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "runtime", "mode", "skill", "skill"])
+    expect(assembled.layers[4]).toEqual(skillLayers[0])
+    expect(assembled.layers[5]).toEqual(skillLayers[1])
+    expect(normalized[4]).toEqual({
       role: "system",
       content: skillLayers[0]!.content
     })
-    expect(normalized[4]).toEqual({
+    expect(normalized[5]).toEqual({
       role: "system",
       content: skillLayers[1]!.content
     })
@@ -374,8 +386,8 @@ describe("collectPrompt", () => {
 
     expect(skillLayers).toHaveLength(1)
     expect(assembled.selectedSkills).toEqual(["missing-skill", "coding-standards"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "skill"])
-    expect(assembled.layers[1]).toEqual(skillLayers[0])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "runtime", "skill"])
+    expect(assembled.layers[2]).toEqual(skillLayers[0])
   })
 
   test("assemblePrompt builds bounded subagent prompts with inherited mode and skills", () => {
@@ -396,15 +408,15 @@ describe("collectPrompt", () => {
       }
     })
     const normalized = normalizePrompt(Prompt.make(assembled.prompt))
-    const subagentLayer = assembled.layers[4]!
+    const subagentLayer = assembled.layers[5]!
 
     expect(assembled.resolvedMode).toBe("review")
     expect(assembled.selectedSkills).toEqual(["coding-standards"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "skill", "subagent"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "runtime", "mode", "skill", "subagent"])
     expect(subagentLayer.source).toBe("subagent:code-reviewer")
     expect(subagentLayer.content).toContain("You are acting as a bounded subagent for the parent agent.")
-    expect(normalized).toHaveLength(6)
-    expect(normalized[5]).toEqual({
+    expect(normalized).toHaveLength(7)
+    expect(normalized[6]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Delegated task brief from the parent agent:\n\nInspect src/foo.ts for regressions around session replay." }]
     })
@@ -435,9 +447,9 @@ describe("collectPrompt", () => {
 
     expect(assembled.resolvedMode).toBe("default")
     expect(assembled.selectedSkills).toEqual(["malkier-ui"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "skill", "subagent"])
-    expect(assembled.layers[1]?.source).toBe(".agents/skills/malkier-ui/SKILL.md")
-    expect(assembled.layers[2]?.source).toBe("subagent:ui-explorer")
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "runtime", "skill", "subagent"])
+    expect(assembled.layers[2]?.source).toBe(".agents/skills/malkier-ui/SKILL.md")
+    expect(assembled.layers[3]?.source).toBe("subagent:ui-explorer")
   })
 
   test("assemblePrompt appends the soft-stop layer before conversation history when requested", () => {
@@ -458,13 +470,13 @@ describe("collectPrompt", () => {
       nearSoftStop: true
     })
     const normalized = normalizePrompt(Prompt.make(assembled.prompt))
-    const reviewLayer = assembled.layers[2]!
-    const skillLayer = assembled.layers[3]!
-    const softStopLayer = assembled.layers[4]!
+    const reviewLayer = assembled.layers[3]!
+    const skillLayer = assembled.layers[4]!
+    const softStopLayer = assembled.layers[5]!
 
     expect(assembled.resolvedMode).toBe("review")
     expect(assembled.selectedSkills).toEqual(["coding-standards"])
-    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "mode", "skill", "soft-stop"])
+    expect(assembled.layers.map((layer) => layer.kind)).toEqual(["base", "repo", "runtime", "mode", "skill", "soft-stop"])
     expect(assembled.layers[1]).toEqual(rootAgentsLayer!)
     expect(assembled.layers[1]?.source).toBe(rootAgentsPromptSource)
     expect(reviewLayer.source).toBe(reviewModePromptSource)
@@ -486,17 +498,21 @@ describe("collectPrompt", () => {
     })
     expect(normalized[2]).toEqual({
       role: "system",
-      content: reviewModePrompt
+      content: loadAvailableSkillSummaryLayer()!.content
     })
     expect(normalized[3]).toEqual({
       role: "system",
-      content: skillLayer.content
+      content: reviewModePrompt
     })
     expect(normalized[4]).toEqual({
       role: "system",
-      content: softStopLayer.content
+      content: skillLayer.content
     })
     expect(normalized[5]).toEqual({
+      role: "system",
+      content: softStopLayer.content
+    })
+    expect(normalized[6]).toEqual({
       role: "user",
       content: [{ type: "text", text: "Wrap up now." }]
     })

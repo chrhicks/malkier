@@ -4,6 +4,11 @@ import { resolve } from "node:path"
 import { Prompt, Response as EffectResponse } from "@effect/ai"
 import { Effect } from "effect"
 import type { AgentMode } from "./agent-mode"
+import {
+  availableSkillsPromptSource,
+  loadAvailableSkillsPrompt,
+  loadSelectedSkills
+} from "./skill-catalog"
 import { malkierBaseSystemPrompt, malkierBaseSystemPromptSource } from "./prompts/base-system-prompt"
 import { reviewModePrompt, reviewModePromptSource } from "./prompts/review-mode-prompt"
 import type { SessionMessageWithMetadata } from "../service/session.service"
@@ -48,7 +53,6 @@ type AssemblePromptOptions = {
 }
 
 const rootAgentsPromptFile = resolve(workspaceRoot, "AGENTS.md")
-const skillsRoot = resolve(workspaceRoot, ".agents/skills")
 
 export const rootAgentsPromptSource = "AGENTS.md"
 export const softStopPromptSource = "@malkier/agent/soft-stop"
@@ -115,23 +119,23 @@ export const loadRootAgentsPromptLayer = (filePath = rootAgentsPromptFile): Prom
   return makePromptLayer("repo", rootAgentsPromptSource, content)
 }
 
-const skillPromptFile = (skillName: string) => resolve(skillsRoot, skillName, "SKILL.md")
-
-const skillPromptSource = (skillName: string) => `.agents/skills/${skillName}/SKILL.md`
-
 const subagentPromptSource = (role: string) => `subagent:${role}`
+
+export const loadAvailableSkillSummaryLayer = (): PromptLayer | null => {
+  const content = loadAvailableSkillsPrompt()
+
+  if (content == null) {
+    return null
+  }
+
+  return makePromptLayer("runtime", availableSkillsPromptSource, content)
+}
 
 export const loadSelectedSkillPromptLayers = (
   selectedSkills: ReadonlyArray<string>
-): ReadonlyArray<PromptLayer> => selectedSkills.flatMap((skillName) => {
-  const content = readPromptFileIfPresent(skillPromptFile(skillName))
-
-  if (content == null || content.length === 0) {
-    return []
-  }
-
-  return [makePromptLayer("skill", skillPromptSource(skillName), content)]
-})
+): ReadonlyArray<PromptLayer> => loadSelectedSkills(selectedSkills).map((skill) =>
+  makePromptLayer("skill", skill.source, skill.content)
+)
 
 const resolveMode = ({
   messages,
@@ -268,12 +272,17 @@ export const assemblePrompt = ({
   const rootAgentsLayer = options.rootAgentsLayer === undefined
     ? loadRootAgentsPromptLayer()
     : options.rootAgentsLayer
+  const availableSkillSummaryLayer = loadAvailableSkillSummaryLayer()
   const layers: Array<PromptLayer> = [
     makePromptLayer("base", malkierBaseSystemPromptSource, malkierBaseSystemPrompt)
   ]
 
   if (rootAgentsLayer !== null) {
     layers.push(rootAgentsLayer)
+  }
+
+  if (availableSkillSummaryLayer !== null) {
+    layers.push(availableSkillSummaryLayer)
   }
 
   if (resolvedMode === "review") {
