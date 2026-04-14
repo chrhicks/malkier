@@ -459,6 +459,14 @@ const resolveWorkspaceTarget = Effect.fn("FileTools.resolveWorkspaceTarget")(fun
   }
 })
 
+const normalizeSearchBasePath = (basePath: string | null): string | null => {
+  if (basePath == null) {
+    return null
+  }
+
+  return basePath.trim() === "." ? null : basePath
+}
+
 const resolveVisibleWorkspaceTarget = Effect.fn("FileTools.resolveVisibleWorkspaceTarget")(function* (inputPath: string) {
   const target = yield* resolveWorkspaceTarget(inputPath)
   yield* ensureVisibleWorkspacePath(target.workspacePath)
@@ -1277,7 +1285,7 @@ export const DeleteFileResultSchema = Schema.Union(DeleteFileSuccessSchema, Dele
 export type DeleteFileResult = Schema.Schema.Type<typeof DeleteFileResultSchema>
 
 export const GlobFilesTool = Tool.make("glob_files", {
-  description: "List workspace files matching a glob pattern.",
+  description: "List workspace files matching a glob pattern. Omit basePath or pass null to search from the workspace root; passing '.' is accepted as a root alias.",
   parameters: GlobFilesParameters,
   success: GlobFilesSuccessSchema,
   failure: FileToolFailureSchema,
@@ -1285,7 +1293,7 @@ export const GlobFilesTool = Tool.make("glob_files", {
 })
 
 export const SearchCodeTool = Tool.make("search_code", {
-  description: "Search text files in the workspace for lines containing a literal substring query. This tool does not support regex syntax.",
+  description: "Search text files in the workspace for lines containing a literal substring query. This tool does not support regex syntax. Omit basePath or pass null to search from the workspace root; passing '.' is accepted as a root alias.",
   parameters: SearchCodeParameters,
   success: SearchCodeSuccessSchema,
   failure: FileToolFailureSchema,
@@ -1333,7 +1341,7 @@ const makeRepoInspectionHandlers = () => ({
     catchFileToolErrors(
       listMatchingFiles({
         pattern,
-        basePath,
+        basePath: normalizeSearchBasePath(basePath),
         maxResults: sanitizePositiveInt(maxResults, defaultGlobResults)
       }).pipe(
         Effect.map(({ basePath: resolvedBasePath, files, truncated }): GlobFilesResult => ({
@@ -1356,7 +1364,7 @@ const makeRepoInspectionHandlers = () => ({
         const limit = sanitizePositiveInt(maxResults, defaultSearchResults)
         const { basePath: resolvedBasePath, files } = yield* listMatchingFiles({
           pattern: include ?? "**/*",
-          basePath,
+          basePath: normalizeSearchBasePath(basePath),
           maxResults: defaultGlobResults * 10
         })
 

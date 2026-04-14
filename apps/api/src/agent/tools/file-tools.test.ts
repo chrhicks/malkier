@@ -109,6 +109,26 @@ describe("getAgentTools file inspection", () => {
     expect(result.result.data.files.some((path) => path.startsWith(".agents/"))).toBe(false)
   })
 
+  test("accepts '.' as a root alias for glob_files", async () => {
+    const toolkit = await getAgentToolkit()
+    const result = await Effect.runPromise(
+      toolkit.handle("glob_files", {
+        pattern: "**/*",
+        basePath: ".",
+        maxResults: 20
+      })
+    )
+
+    expect(result.isFailure).toBe(false)
+    if (result.isFailure || "kind" in result.result) {
+      return
+    }
+
+    expect(result.result.status).toBe("success")
+    expect(result.result.data.basePath).toBe(".")
+    expect(result.result.data.files).toContain("README.md")
+  })
+
   test("searches from the repo root without scanning ignored trees", async () => {
     const toolkit = await getAgentToolkit()
     const result = await Effect.runPromise(
@@ -131,6 +151,50 @@ describe("getAgentTools file inspection", () => {
     expect(
       result.result.data.matches.every((match: { path: string }) => !match.path.startsWith(".agents/"))
     ).toBe(true)
+  })
+
+  test("accepts '.' as a root alias for search_code but still rejects empty basePath", async () => {
+    const toolkit = await getAgentToolkit()
+
+    const success = await Effect.runPromise(
+      toolkit.handle("search_code", {
+        query: "workspaceRoot",
+        basePath: ".",
+        include: null,
+        caseSensitive: false,
+        maxResults: 20
+      })
+    )
+
+    expect(success.isFailure).toBe(false)
+    if (!success.isFailure && !("kind" in success.result)) {
+      expect(success.result.status).toBe("success")
+      expect(success.result.data.basePath).toBe(".")
+    }
+
+    const failure = await Effect.runPromise(
+      toolkit.handle("search_code", {
+        query: "workspaceRoot",
+        basePath: "",
+        include: null,
+        caseSensitive: false,
+        maxResults: 20
+      })
+    )
+
+    expect(failure).toEqual({
+      isFailure: true,
+      result: {
+        kind: "invalid-path",
+        message: "Paths must be non-empty and workspace-relative.",
+        path: ""
+      },
+      encodedResult: {
+        kind: "invalid-path",
+        message: "Paths must be non-empty and workspace-relative.",
+        path: ""
+      }
+    })
   })
 
   test("blocks direct reads of gitignored files", async () => {
