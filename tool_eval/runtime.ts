@@ -1,20 +1,19 @@
 import { Prompt } from "@effect/ai"
 import { Effect, Layer } from "effect"
-import { Agent, agentRuntimeConfigOptions, layerConfig } from "../packages/agent/src"
+import { Agent, layer } from "../packages/agent/src"
+import { getMalkierConfig, toAgentOptions } from "../apps/api/src/config/malkier-config"
 import type { SessionService } from "../apps/api/src/service/session.service"
 import { malkierBaseSystemPrompt } from "../apps/api/src/agent/prompts/base-system-prompt"
 import { buildPromptSource, resolveGitSha, type EvalRunMetadata } from "./core"
 
-export const defaultEvalAgentModel = "gpt-5.3-codex"
-const defaultEvalAgentApiUrl = "https://opencode.ai/zen/v1"
-const defaultEvalDbPath = "../../tool_eval/results/.data/malkier-eval.sqlite"
+const malkierConfig = getMalkierConfig()
+
+export const defaultEvalAgentModel = malkierConfig.agent.model.name
+const defaultEvalDbPath = malkierConfig.evals.databasePath
 
 export const basePromptFilePath = "apps/api/src/agent/prompts/malkier-base-system-prompt.md"
 
-const agentLayer = layerConfig(agentRuntimeConfigOptions({
-  defaultModel: defaultEvalAgentModel,
-  defaultApiUrl: defaultEvalAgentApiUrl
-}))
+const agentLayer = layer(toAgentOptions(malkierConfig.agent))
 
 const loadSessionServiceModule = Effect.tryPromise({
   try: async () => {
@@ -55,7 +54,7 @@ export const createEvalContext = Effect.gen(function* () {
     agent: yield* Agent,
     sessionService: yield* SessionService,
     userId: crypto.randomUUID(),
-    model: Bun.env.MALKIER_AGENT_MODEL ?? defaultEvalAgentModel,
+    model: malkierConfig.agent.model.name,
     gitSha: yield* resolveGitSha
   }
 })

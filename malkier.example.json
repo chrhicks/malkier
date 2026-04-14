@@ -1,0 +1,16 @@
+{
+  "agent": {
+    "model": {
+      "reasoningEffort": "high",
+      "verbosity": "medium",
+      "temperature": null,
+      "maxCompletionTokens": 12000
+    }
+  },
+  "api": {
+    "port": 8787
+  },
+  "database": {
+    "path": "apps/api/.data/malkier.sqlite"
+  }
+}

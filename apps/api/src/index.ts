@@ -1,4 +1,5 @@
 import { Effect, Layer } from "effect"
+import { getMalkierConfig } from "./config/malkier-config"
 import { HoneycombObservabilityLive } from "./observability/honeycomb"
 import { dbPath } from "./db/client"
 import { migrateDb } from "./db/migrate"
@@ -9,15 +10,18 @@ import { postAgentStream } from "./handlers/post-agent-stream"
 import { SessionService } from "./service/session.service"
 
 const ApiLive = Layer.mergeAll(SessionService.Default, HoneycombObservabilityLive)
+const malkierConfig = getMalkierConfig()
 
 const runApi = <A, E>(effect: Effect.Effect<A, E, SessionService>) =>
   Effect.runPromise(effect.pipe(Effect.provide(ApiLive)))
 
-migrateDb()
+if (malkierConfig.database.migrateOnStartup) {
+  migrateDb()
+}
 
 const server = Bun.serve({
-  idleTimeout: 30,
-  port: Number(Bun.env.PORT ?? 8787),
+  idleTimeout: malkierConfig.api.idleTimeoutSeconds,
+  port: malkierConfig.api.port,
   routes: {
     "/health": () => json(200, { ok: true }),
     "/api/sessions": {

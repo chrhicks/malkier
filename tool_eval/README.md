@@ -33,9 +33,13 @@ This directory holds isolated evals for Malkier's agent behavior.
 - `bun run eval:repo-grounded-approach`: run the repo-grounded architecture-answer eval.
 - `bun run eval:all`: run all live evals sequentially.
 
-## Environment
+## Configuration
 
-Live evals use the same defaults as the current agent harness unless overridden:
+Live evals now load the same built-in defaults as the API from `apps/api/src/config/malkier-config.ts`.
+You can optionally add a workspace-root `malkier.json` file to override only the settings you care about.
+See `malkier.example.json` for a minimal example override file.
+
+Environment variables still override both the built-in defaults and `malkier.json` when present:
 
 - `MALKIER_AGENT_MODEL`
 - `MALKIER_AGENT_API_URL`
@@ -43,6 +47,8 @@ Live evals use the same defaults as the current agent harness unless overridden:
 - `MALKIER_AGENT_REASONING_EFFORT`
 - `MALKIER_AGENT_VERBOSITY`
 - `MALKIER_AGENT_MAX_COMPLETION_TOKENS`
+- `MALKIER_DB_PATH`
+- `MALKIER_EVAL_DB_PATH`
 - `OPENCODE_ZEN_API_KEY`
 
-If `MALKIER_DB_PATH` is not set, evals default to an isolated sqlite database at `tool_eval/results/.data/malkier-eval.sqlite` so they do not pollute the app's normal local state.
+If neither `malkier.json` nor `MALKIER_EVAL_DB_PATH` is set, evals default to an isolated sqlite database at `tool_eval/results/.data/malkier-eval.sqlite` so they do not pollute the app's normal local state.

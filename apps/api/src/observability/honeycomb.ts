@@ -1,6 +1,7 @@
 import { FetchHttpClient } from "@effect/platform"
 import { Otlp } from "@effect/opentelemetry"
-import { Config, Effect, Layer, Option, Redacted } from "effect"
+import { Layer, Redacted } from "effect"
+import { getMalkierConfig } from "../config/malkier-config"
 
 const signalPathPattern = /\/v1\/(?:traces|metrics|logs)$/
 
@@ -35,51 +36,33 @@ const resolveHeaders = ({
   headers,
   apiKey
 }: {
-  headers: Option.Option<string>
-  apiKey: Option.Option<Redacted.Redacted>
+  headers: string | null
+  apiKey: Redacted.Redacted | null
 }) =>
-  Option.match(headers, {
-    onNone: () =>
-      Option.match(apiKey, {
-        onNone: () => ({}),
-        onSome: (value) => ({ "x-honeycomb-team": Redacted.value(value) })
-      }),
-    onSome: parseHeaders
-  })
+  headers === null
+    ? apiKey === null
+      ? {}
+      : { "x-honeycomb-team": Redacted.value(apiKey) }
+    : parseHeaders(headers)
 
-export const HoneycombObservabilityLive = Layer.unwrapEffect(
-  Config.all({
-    endpoint: Config.string("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(
-      Config.withDefault("https://api.honeycomb.io")
-    ),
-    serviceName: Config.string("OTEL_SERVICE_NAME").pipe(
-      Config.withDefault("malkier-api")
-    ),
-    headers: Config.option(Config.string("OTEL_EXPORTER_OTLP_HEADERS")),
-    apiKey: Config.option(Config.redacted("HONEYCOMB_API_KEY"))
-  }).pipe(
-    Effect.map(({ endpoint, serviceName, headers, apiKey }) => {
-      const deploymentEnvironment = Bun.env.DEPLOYMENT_ENVIRONMENT ?? Bun.env.NODE_ENV
-      const serviceVersion = Bun.env.OTEL_SERVICE_VERSION ?? Bun.env.npm_package_version
-      const resolvedHeaders = resolveHeaders({ headers, apiKey })
+const observabilityConfig = getMalkierConfig().observability
+const resolvedHeaders = resolveHeaders({
+  headers: observabilityConfig.headers,
+  apiKey: observabilityConfig.apiKey
+})
 
-      if (Object.keys(resolvedHeaders).length === 0) {
-        return Layer.empty
+export const HoneycombObservabilityLive = !observabilityConfig.enabled || Object.keys(resolvedHeaders).length === 0
+  ? Layer.empty
+  : Otlp.layerProtobuf({
+      baseUrl: normalizeBaseUrl(observabilityConfig.endpoint),
+      headers: resolvedHeaders,
+      resource: {
+        serviceName: observabilityConfig.serviceName,
+        serviceVersion: observabilityConfig.serviceVersion ?? undefined,
+        attributes: observabilityConfig.deploymentEnvironment === null
+          ? undefined
+          : {
+              "deployment.environment": observabilityConfig.deploymentEnvironment
+            }
       }
-
-      return Otlp.layerProtobuf({
-        baseUrl: normalizeBaseUrl(endpoint),
-        headers: resolvedHeaders,
-        resource: {
-          serviceName,
-          serviceVersion,
-          attributes: deploymentEnvironment === undefined
-            ? undefined
-            : {
-                "deployment.environment": deploymentEnvironment
-              }
-        }
-      }).pipe(Layer.provide(FetchHttpClient.layer))
-    })
-  )
-)
+    }).pipe(Layer.provide(FetchHttpClient.layer))
