@@ -39,6 +39,10 @@ Live evals use the same defaults as the current agent harness unless overridden:
 
 - `MALKIER_AGENT_MODEL`
 - `MALKIER_AGENT_API_URL`
+- `MALKIER_AGENT_TEMPERATURE`
+- `MALKIER_AGENT_REASONING_EFFORT`
+- `MALKIER_AGENT_VERBOSITY`
+- `MALKIER_AGENT_MAX_COMPLETION_TOKENS`
 - `OPENCODE_ZEN_API_KEY`
 
 If `MALKIER_DB_PATH` is not set, evals default to an isolated sqlite database at `tool_eval/results/.data/malkier-eval.sqlite` so they do not pollute the app's normal local state.

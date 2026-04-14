@@ -1,6 +1,6 @@
 import { Prompt } from "@effect/ai"
-import { Config, Effect, Layer } from "effect"
-import { Agent, layerConfig } from "../packages/agent/src"
+import { Effect, Layer } from "effect"
+import { Agent, agentRuntimeConfigOptions, layerConfig } from "../packages/agent/src"
 import type { SessionService } from "../apps/api/src/service/session.service"
 import { malkierBaseSystemPrompt } from "../apps/api/src/agent/prompts/base-system-prompt"
 import { buildPromptSource, resolveGitSha, type EvalRunMetadata } from "./core"
@@ -11,11 +11,10 @@ const defaultEvalDbPath = "../../tool_eval/results/.data/malkier-eval.sqlite"
 
 export const basePromptFilePath = "apps/api/src/agent/prompts/malkier-base-system-prompt.md"
 
-const agentLayer = layerConfig({
-  model: Config.string("MALKIER_AGENT_MODEL").pipe(Config.withDefault(defaultEvalAgentModel)),
-  apiUrl: Config.string("MALKIER_AGENT_API_URL").pipe(Config.withDefault(defaultEvalAgentApiUrl)),
-  apiKey: Config.redacted("OPENCODE_ZEN_API_KEY")
-})
+const agentLayer = layerConfig(agentRuntimeConfigOptions({
+  defaultModel: defaultEvalAgentModel,
+  defaultApiUrl: defaultEvalAgentApiUrl
+}))
 
 const loadSessionServiceModule = Effect.tryPromise({
   try: async () => {

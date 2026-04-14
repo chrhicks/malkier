@@ -6,6 +6,7 @@ import { AiError, LanguageModel, Prompt } from "@effect/ai";
 import type * as Tool from '@effect/ai/Tool'
 import type * as Response from "@effect/ai/Response";
 import { AgentMaxTurnsExceededError, StreamTimeoutError, TurnTimeoutError } from "./errors";
+import type { AgentModelControls } from "./config";
 
 const maxModelRounds = 30
 const softMaxModelRounds = 28
@@ -53,7 +54,7 @@ export declare namespace Agent {
     ) => Stream.Stream<AgentEvent, AgentStreamError>
   }
 
-  export interface Options {
+  export interface Options extends AgentModelControls {
     readonly model: string
     readonly apiUrl: string
     readonly apiKey: Redacted.Redacted
@@ -63,12 +64,30 @@ export declare namespace Agent {
     readonly model: Config.Config<string>
     readonly apiUrl: Config.Config<string>
     readonly apiKey: Config.Config<Redacted.Redacted>
+    readonly temperature?: Config.Config<number | undefined>
+    readonly reasoningEffort?: Config.Config<AgentModelControls["reasoningEffort"]>
+    readonly verbosity?: Config.Config<AgentModelControls["verbosity"]>
+    readonly maxCompletionTokens?: Config.Config<number | undefined>
   }
 }
 
+const makeLanguageModelConfig = (options: Agent.Options) => ({
+  temperature: options.temperature,
+  reasoning_effort: options.reasoningEffort,
+  max_completion_tokens: options.maxCompletionTokens,
+  text: options.verbosity === undefined
+    ? undefined
+    : {
+        verbosity: options.verbosity
+      }
+})
+
 const providerLayer = (options: Agent.Options) =>
   Layer.provide(
-    OpenAiLanguageModel.layer({ model: options.model }),
+    OpenAiLanguageModel.layer({
+      model: options.model,
+      config: makeLanguageModelConfig(options)
+    }),
     Layer.provide(
       OpenAiClient.layer({
         apiKey: options.apiKey,
@@ -281,7 +300,11 @@ export const layerConfig = (options: Agent.ConfigOptions): Layer.Layer<Agent, Co
     Config.all({
       model: options.model,
       apiUrl: options.apiUrl,
-      apiKey: options.apiKey
+      apiKey: options.apiKey,
+      temperature: options.temperature ?? Config.succeed(undefined),
+      reasoningEffort: options.reasoningEffort ?? Config.succeed(undefined),
+      verbosity: options.verbosity ?? Config.succeed(undefined),
+      maxCompletionTokens: options.maxCompletionTokens ?? Config.succeed(undefined)
     }).pipe(
       Effect.flatMap(make)
     )
