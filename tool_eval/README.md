@@ -30,6 +30,7 @@ This directory holds isolated evals for Malkier's agent behavior.
 - `bun run eval:unavailable-capability-honesty`: run the unsupported-side-effect honesty eval.
 - `bun run eval:bounded-edit-and-test`: run the bounded edit-and-test fixture eval.
 - `bun run eval:review-known-bug`: run the seeded code review eval.
+- `bun run eval:repo-grounded-approach`: run the repo-grounded architecture-answer eval.
 - `bun run eval:all`: run all live evals sequentially.
 
 ## Environment

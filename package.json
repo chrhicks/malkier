@@ -10,7 +10,8 @@
     "eval:unavailable-capability-honesty": "bun tool_eval/unavailable-capability-honesty.ts",
     "eval:bounded-edit-and-test": "bun tool_eval/bounded-edit-and-test.ts",
     "eval:review-known-bug": "bun tool_eval/review-known-bug.ts",
-    "eval:all": "bun run eval:hello-no-tool && bun run eval:must-use-tool && bun run eval:unavailable-capability-honesty && bun run eval:bounded-edit-and-test && bun run eval:review-known-bug"
+    "eval:repo-grounded-approach": "bun tool_eval/repo-grounded-approach.ts",
+    "eval:all": "bun run eval:hello-no-tool && bun run eval:must-use-tool && bun run eval:unavailable-capability-honesty && bun run eval:bounded-edit-and-test && bun run eval:review-known-bug && bun run eval:repo-grounded-approach"
   },
   "workspaces": [
     "packages/*",
