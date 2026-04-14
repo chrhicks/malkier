@@ -73,8 +73,12 @@ export declare namespace Agent {
 
 const makeLanguageModelConfig = (options: Agent.Options) => ({
   temperature: options.temperature,
-  reasoning_effort: options.reasoningEffort,
-  max_completion_tokens: options.maxCompletionTokens,
+  reasoning: options.reasoningEffort === undefined
+    ? undefined
+    : {
+        effort: options.reasoningEffort
+      },
+  max_output_tokens: options.maxCompletionTokens,
   text: options.verbosity === undefined
     ? undefined
     : {
