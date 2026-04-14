@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect"
 import { HoneycombObservabilityLive } from "./observability/honeycomb"
 import { dbPath } from "./db/client"
+import { migrateDb } from "./db/migrate"
 import { getSession } from "./handlers/get-session"
 import { getSessions } from "./handlers/get-sessions"
 import { json } from "./request-utils"
@@ -11,6 +12,8 @@ const ApiLive = Layer.mergeAll(SessionService.Default, HoneycombObservabilityLiv
 
 const runApi = <A, E>(effect: Effect.Effect<A, E, SessionService>) =>
   Effect.runPromise(effect.pipe(Effect.provide(ApiLive)))
+
+migrateDb()
 
 const server = Bun.serve({
   idleTimeout: 30,
