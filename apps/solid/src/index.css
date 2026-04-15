@@ -182,15 +182,14 @@ body {
 }
 
 .bubble {
-  border-radius: var(--radius-tight);
-  padding: 0.72rem 0.84rem;
-  border: 1px solid rgba(90, 125, 139, 0.42);
+  border-radius: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   max-width: min(90%, 54rem);
   min-width: 0;
   animation: rise 0.32s ease;
-  transition:
-    border-color 220ms ease,
-    background 220ms ease;
+  transition: color 220ms ease;
 }
 
 .bubble.surface-tool-call,
@@ -201,18 +200,20 @@ body {
 
 .bubble.user {
   margin-left: auto;
+  border-radius: var(--radius-tight);
+  padding: 0.72rem 0.84rem;
   background: rgba(16, 45, 61, 0.55);
+  border: 1px solid rgba(84, 147, 172, 0.45);
   border-color: rgba(84, 147, 172, 0.45);
 }
 
 .bubble.assistant {
-  background: rgba(9, 19, 28, 0.8);
+  color: var(--text);
 }
 
 .bubble.system,
 .bubble.tool {
-  background: rgba(16, 18, 25, 0.92);
-  border-style: dashed;
+  color: var(--muted);
 }
 
 .bubble.error {
@@ -221,7 +222,7 @@ body {
 }
 
 .bubble.streaming {
-  border-color: var(--border-accent);
+  color: var(--accent);
 }
 
 .bubble-role {
@@ -273,9 +274,82 @@ body {
 .bubble-text,
 .tool-empty {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.tool-inline-copy {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.tool-combo {
+  border: 0;
+  margin: 0;
+}
+
+.tool-combo-summary {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  border-radius: var(--radius-tight);
+  padding: 0.08rem 0.16rem 0.08rem 0;
+}
+
+.tool-combo-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-combo-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool-combo-status {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tool-combo-caret::before {
+  content: ">";
+  color: var(--muted);
+}
+
+.tool-combo[open] .tool-combo-caret::before {
+  content: "v";
+}
+
+.tool-combo-body {
+  margin-top: 0.3rem;
+}
+
+.tool-combo.failure .tool-combo-summary {
+  color: var(--danger);
+}
+
+.tool-combo.failure .tool-combo-status {
+  color: var(--danger);
+}
+
+.tool-combo.warning .tool-combo-summary,
+.tool-combo.warning .tool-combo-status {
+  color: var(--warn);
 }
 
 .surface-head {
@@ -344,6 +418,7 @@ body {
   line-height: 1.5;
   margin: 0;
   max-width: 100%;
+  max-height: min(22rem, 55vh);
   overflow: auto;
   overflow-wrap: anywhere;
   padding: 0.7rem;
@@ -822,7 +897,7 @@ body {
   cursor: default;
 }
 
-:where(.composer input, .composer button, .ghost-button, .session-card, .tool-summary):focus-visible {
+:where(.composer input, .composer button, .ghost-button, .session-card, .tool-summary, .tool-combo-summary):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   box-shadow: 0 0 0 1px var(--focus-ring-shadow);
@@ -1007,8 +1082,7 @@ body {
 }
 
 .deck.variant-e .bubble {
-  border-color: #3d4454;
-  background: #0f1118;
+  background: transparent;
 }
 
 .deck.variant-e .bubble.user {

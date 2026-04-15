@@ -11,6 +11,7 @@ import {
 import { bubbleFromAgentEvent, bubblesFromSessionMessages, errorBubble, textBubble } from "./lib/format.util";
 import type { Bubble } from "./types";
 import { MessageBubble } from "./components/MessageBubble";
+import { ToolComboRow } from "./components/ToolComboRow";
 
 const sessionTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -28,6 +29,15 @@ const formatSessionTitle = (session: SessionSummary | null) => session?.title?.t
 
 const formatSessionTimestamp = (value: string) => sessionTimestampFormatter.format(new Date(value));
 
+type TranscriptItem =
+  | { kind: "bubble"; bubble: Bubble }
+  | {
+      kind: "tool-combo";
+      toolName: string;
+      args: { label: string; value: string }[];
+      resultPayload: string;
+      outcome: "success" | "failure";
+    };
 
 const sortSessions = (items: SessionSummary[]) =>
   [...items].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
@@ -116,6 +126,35 @@ export function App() {
   const [shouldAutoScroll, setShouldAutoScroll] = createSignal(true);
 
   const activeSession = createMemo(() => sessions().find((session) => session.id === activeSessionId()) ?? null);
+  const transcriptItems = createMemo<TranscriptItem[]>(() => {
+    const items = bubbles();
+    const next: TranscriptItem[] = [];
+
+    for (let index = 0; index < items.length; index += 1) {
+      const current = items[index]!;
+      const after = items[index + 1];
+
+      if (
+        current.surface.kind === "tool-call" &&
+        after?.surface.kind === "tool-result" &&
+        after.surface.id === current.surface.id
+      ) {
+        next.push({
+          kind: "tool-combo",
+          toolName: current.surface.name,
+          args: current.surface.args,
+          resultPayload: after.surface.payload,
+          outcome: after.surface.outcome,
+        });
+        index += 1;
+        continue;
+      }
+
+      next.push({ kind: "bubble", bubble: current });
+    }
+
+    return next;
+  });
 
   const isNearBottom = (element: HTMLElement) => element.scrollHeight - element.scrollTop - element.clientHeight < 72;
 
@@ -363,9 +402,18 @@ export function App() {
                 when={bubbles().length > 0 || activeBubble() !== null}
                 fallback={<p class="empty-state">No conversation yet. Start a new session from the prompt below.</p>}
               >
-                <For each={bubbles()}>
-                  {(bubble) => (
-                    <MessageBubble bubble={bubble} />
+                <For each={transcriptItems()}>
+                  {(item) => (
+                    item.kind === "tool-combo" ? (
+                      <ToolComboRow
+                        toolName={item.toolName}
+                        args={item.args}
+                        resultPayload={item.resultPayload}
+                        outcome={item.outcome}
+                      />
+                    ) : (
+                      <MessageBubble bubble={item.bubble} />
+                    )
                   )}
                 </For>
                 <Show when={activeBubble() !== null}>

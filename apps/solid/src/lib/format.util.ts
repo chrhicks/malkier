@@ -283,6 +283,7 @@ export const bubbleFromAgentEvent = (event: AgentEvent): Bubble | null => {
       role: "assistant",
       status: "complete",
       surface: {
+        id: event.id,
         kind: "tool-call",
         label: humanizeToolName(event.name),
         name: event.name,
@@ -296,6 +297,7 @@ export const bubbleFromAgentEvent = (event: AgentEvent): Bubble | null => {
       role: "tool",
       status: event.isFailure ? "error" : "complete",
       surface: {
+        id: event.id,
         kind: "tool-result",
         label: humanizeToolName(event.name),
         name: event.name,
@@ -314,6 +316,7 @@ export const bubbleFromSessionMessage = (message: SessionMessage): Bubble => {
       role: message.role,
       status: message.status,
       surface: {
+        id: message.metadata.id,
         kind: "tool-call",
         label: humanizeToolName(message.metadata.name),
         name: message.metadata.name,
@@ -327,6 +330,7 @@ export const bubbleFromSessionMessage = (message: SessionMessage): Bubble => {
       role: message.role,
       status: message.metadata.isFailure ? "error" : message.status,
       surface: {
+        id: message.metadata.id,
         kind: "tool-result",
         label: humanizeToolName(message.metadata.name),
         name: message.metadata.name,

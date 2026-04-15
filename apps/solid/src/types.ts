@@ -11,12 +11,14 @@ export type BubbleSurface =
       text: string;
     }
   | {
+      id: string;
       kind: "tool-call";
       label: string;
       name: string;
       args: BubbleArgument[];
     }
   | {
+      id: string;
       kind: "tool-result";
       label: string;
       name: string;
