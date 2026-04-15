@@ -1,3 +1,5 @@
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import type { Bubble } from "../types";
 import { ToolResultStandalone } from "./ToolResultSurface";
 
@@ -44,6 +46,11 @@ export function MessageBubble({ bubble }: { bubble: Bubble }) {
   const renderSurface = () => {
     switch (bubble.surface.kind) {
       case "text":
+        if (bubble.role === "assistant" && bubble.status === "complete") {
+          const html = DOMPurify.sanitize(marked.parse(bubble.surface.text, { gfm: true }) as string);
+          return <div class="bubble-markdown" innerHTML={html} />;
+        }
+
         return (
           <p class="bubble-text">
             {bubble.status === "streaming" && bubble.surface.text.length === 0
