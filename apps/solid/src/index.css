@@ -779,35 +779,132 @@ body {
 .composer {
   border-top: 1px solid var(--border-divider);
   display: grid;
-  grid-template-columns: 1fr auto;
   gap: 0.55rem;
   padding: 0.8rem;
 }
 
-.composer input {
-  width: 100%;
-  border: 1px solid var(--input-border);
-  background: var(--input-surface);
-  color: var(--text);
-  border-radius: var(--radius-tight);
-  padding: 0.78rem 0.75rem;
-  font: inherit;
+.composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
-.composer button {
-  border: 0;
-  border-radius: var(--radius-tight);
-  background: linear-gradient(180deg, #5ee6ff 0%, #1596b1 100%);
-  color: #041a22;
-  font: inherit;
+.composer-label,
+.composer-hint {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 0 0.95rem;
-  min-width: 6.25rem;
-  cursor: pointer;
 }
 
-.composer button:disabled {
+.composer-label {
+  color: var(--text);
+}
+
+.composer-hint {
+  color: var(--muted);
+}
+
+.composer-shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: stretch;
+  padding: 0.55rem;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-tight);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0%, transparent 42%),
+    linear-gradient(180deg, rgba(7, 19, 28, 0.98) 0%, rgba(5, 11, 17, 0.98) 100%);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+.composer-shell.pending {
+  border-color: rgba(246, 197, 121, 0.35);
+}
+
+.composer-shell:focus-within {
+  border-color: var(--border-accent-strong);
+  box-shadow: 0 0 0 1px var(--focus-ring-shadow);
+}
+
+.composer-glyph {
+  padding-top: 0.42rem;
+  color: var(--accent);
+  font-family: "Share Tech Mono", "IBM Plex Mono", monospace;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 5.1rem;
+  max-height: 12rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  padding: 0.1rem 0;
+  resize: vertical;
+}
+
+.composer textarea::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.composer textarea:disabled {
+  cursor: default;
+}
+
+.composer textarea:focus {
+  outline: 0;
+}
+
+.composer-submit {
+  border: 1px solid var(--ghost-border);
+  background: linear-gradient(180deg, rgba(8, 31, 40, 0.98) 0%, rgba(7, 16, 24, 0.98) 100%);
+  color: var(--text);
+  min-width: 7.25rem;
+  padding: 0.65rem 0.85rem;
+  display: grid;
+  align-content: center;
+  gap: 0.14rem;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    transform 180ms ease;
+}
+
+.composer-submit-label,
+.composer-submit-meta {
+  text-transform: uppercase;
+}
+
+.composer-submit-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+}
+
+.composer-submit-meta {
+  color: var(--muted);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+}
+
+.composer-submit:hover:not(:disabled) {
+  border-color: var(--border-accent);
+  background: linear-gradient(180deg, rgba(11, 37, 48, 0.98) 0%, rgba(8, 19, 28, 0.98) 100%);
+  transform: translateY(-1px);
+}
+
+.composer-submit:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -897,13 +994,13 @@ body {
   cursor: default;
 }
 
-:where(.composer input, .composer button, .ghost-button, .session-card, .tool-summary, .tool-combo-summary):focus-visible {
+:where(.composer textarea, .composer button, .ghost-button, .session-card, .tool-summary, .tool-combo-summary):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   box-shadow: 0 0 0 1px var(--focus-ring-shadow);
 }
 
-:where(.composer button, .ghost-button, .session-card, .tool-summary):focus-visible {
+:where(.composer button, .ghost-button, .session-card, .tool-summary, .tool-combo-summary):focus-visible {
   border-color: var(--border-accent-strong);
 }
 
@@ -1154,14 +1251,26 @@ body {
   background: rgba(4, 217, 255, 0.08);
 }
 
-.deck.variant-e .composer button {
-  border: 1px solid #3a4354;
-  background: #121722;
+.deck.variant-e .composer-shell {
+  border-color: #323744;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0%, transparent 42%),
+    linear-gradient(180deg, #0d121a 0%, #090d14 100%);
+}
+
+.deck.variant-e .composer-shell:focus-within {
+  border-color: var(--border-accent-strong);
+}
+
+.deck.variant-e .composer-submit {
+  border-color: #3a4354;
+  background: linear-gradient(180deg, #141925 0%, #101520 100%);
   color: #d8deea;
 }
 
-.deck.variant-e .composer button:hover:not(:disabled) {
+.deck.variant-e .composer-submit:hover:not(:disabled) {
   border-color: var(--border-accent);
+  background: linear-gradient(180deg, #171d2a 0%, #121825 100%);
 }
 
 .deck.variant-e .task-chip {
@@ -1349,7 +1458,17 @@ body {
     font-size: 0.92rem;
   }
 
-  .composer {
-    grid-template-columns: 1fr;
+  .composer-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .composer-shell {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .composer-submit {
+    grid-column: 1 / -1;
+    min-width: 0;
   }
 }

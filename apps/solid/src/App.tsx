@@ -108,7 +108,7 @@ const createAssistantStreamController = (options: {
 };
 
 export function App() {
-  let prompt!: HTMLInputElement;
+  let prompt!: HTMLTextAreaElement;
   let chatLog!: HTMLDivElement;
   let sessionLoadVersion = 0;
   let scrollFrame = 0;
@@ -366,6 +366,15 @@ export function App() {
     }
   };
 
+  const handlePromptKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    event.preventDefault();
+    (event.currentTarget as HTMLTextAreaElement | null)?.form?.requestSubmit();
+  };
+
   return (
     <div class="deck variant-e">
       <div class="ambient" aria-hidden="true" />
@@ -424,14 +433,28 @@ export function App() {
           </div>
 
           <form class="composer" onSubmit={submitPrompt}>
-            <label class="sr-only" for="prompt-input">Message Malkier</label>
-            <input
-              id="prompt-input"
-              ref={prompt}
-              placeholder="Ask Malkier to explain code, debug, or ship a fix"
-              disabled={pending()}
-            />
-            <button type="submit" disabled={pending()}>{pending() ? "running" : "dispatch"}</button>
+            <div class="composer-head">
+              <label class="composer-label" for="prompt-input">Message Malkier</label>
+              <span class="composer-hint">
+                {pending() ? "Malkier is responding | input locked" : "Press Enter to send | Shift+Enter for a new line"}
+              </span>
+            </div>
+            <div class="composer-shell" classList={{ pending: pending() }}>
+              <span class="composer-glyph" aria-hidden="true">&gt;</span>
+              <textarea
+                id="prompt-input"
+                ref={prompt}
+                rows={3}
+                placeholder="Ask a question, debug an issue, or request a change"
+                disabled={pending()}
+                spellcheck={false}
+                onKeyDown={handlePromptKeyDown}
+              />
+              <button type="submit" class="composer-submit" disabled={pending()}>
+                <span class="composer-submit-label">{pending() ? "Working" : "Send message"}</span>
+                <span class="composer-submit-meta">{pending() ? "locked" : "enter"}</span>
+              </button>
+            </div>
           </form>
         </section>
 
